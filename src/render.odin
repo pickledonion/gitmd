@@ -23,11 +23,11 @@ preview_fragment :: proc(commit: ^Commit) -> string {
 }
 
 watch_fragment :: proc(history: ^History, selected_commit: int) -> string {
-	if history.commits[selected_commit].working {
-		path := net.percent_encode(history.path, context.temp_allocator)
-		return fmt.aprintf(`<div id="watch" data-init="@get('/watch?path=%s')"></div>`, path)
-	}
-	return `<div id="watch"></div>`
+	path := net.percent_encode(history.path, context.temp_allocator)
+	commit_hash := history.commits[selected_commit].full_hash
+	if history.commits[selected_commit].working { commit_hash = "working" }
+	commit := net.percent_encode(commit_hash, context.temp_allocator)
+	return fmt.aprintf(`<div id="watch" data-init="@get('/watch?path=%s&amp;commit=%s')"></div>`, path, commit)
 }
 
 sse_patch_elements :: proc(elements: string) -> string {
@@ -142,10 +142,34 @@ render_history :: proc(history: ^History, selected_commit: int) -> string {
 		if index == selected_commit {
 			selected_class = ` class="selected" aria-current="page"`
 		}
+		url := repository_url(history.path)
 		fmt.sbprintf(&builder, `
-<li><a id="commit-%s"%s href="%s?commit=%s&amp;sidebar=history" data-index="%d" data-on:click="evt.preventDefault(); clearTimeout($historyTimer); const current = evt.currentTarget.closest('.history').querySelector('a.selected'); if (current !== evt.currentTarget) {{ current?.classList.remove('selected'); current?.removeAttribute('aria-current'); evt.currentTarget.classList.add('selected'); evt.currentTarget.setAttribute('aria-current', 'page') }}; $selected = %d; @get('/snapshot/%s'); history.replaceState(null, '', evt.currentTarget.href)">
+<li><a id="commit-%s"%s href="%s?commit=%s&amp;sidebar=history" data-index="%d" data-on:click="evt.preventDefault(); clearTimeout($historyTimer); const current = evt.currentTarget.closest('.history').querySelector('a.selected'); if (current !== evt.currentTarget) {{ current?.classList.remove('selected'); current?.removeAttribute('aria-current'); evt.currentTarget.classList.add('selected'); evt.currentTarget.setAttribute('aria-current', 'page') }}; $selected = %d; @get('%s?commit=%s&amp;partial=1'); history.replaceState(null, '', evt.currentTarget.href)">
 <span class="commit-subject">%s</span><span class="commit-meta"><code>%s</code><time datetime="%s">%s</time></span>
-</a></li>`, commit.full_hash, selected_class, repository_url(history.path), commit.short_hash, index, index, commit.full_hash, html_escape(commit.subject), commit.short_hash, html_escape(commit.author_date), date)
+</a></li>`, commit.full_hash, selected_class, url, commit.short_hash, index, index, url, commit.full_hash, html_escape(commit.subject), commit.short_hash, html_escape(commit.author_date), date)
+	}
+	strings.write_string(&builder, "\n</ol></section>")
+	return strings.clone(strings.to_string(builder))
+}
+
+render_files :: proc(repository: ^Repository) -> string {
+	builder := strings.builder_make()
+	defer strings.builder_destroy(&builder)
+	strings.write_string(&builder, `<section id="files" class="file-browser" aria-label="Markdown files" data-show="$sidebar === 'files'">
+`)
+	strings.write_string(&builder, render_sidebar_search("files"))
+	strings.write_string(&builder, `<ol>`)
+	for file, index in repository.files {
+		selected_class := ""
+		if index == repository.selected_file {
+			selected_class = fmt.aprintf(
+				` class="selected" aria-current="page" data-init="document.getElementById('file-%d').scrollIntoView({{block:'nearest'}})"`,
+				index,
+			)
+		}
+		url := repository_url(file)
+		fmt.sbprintf(&builder, `
+<li><a id="file-%d"%s href="%s" data-path="%s" data-on:click="evt.preventDefault(); const current = evt.currentTarget.closest('.file-browser').querySelector('a.selected'); if (current !== evt.currentTarget) {{ current?.classList.remove('selected'); current?.removeAttribute('aria-current'); evt.currentTarget.classList.add('selected'); evt.currentTarget.setAttribute('aria-current', 'page') }}; evt.currentTarget.focus({{preventScroll:true}}); evt.currentTarget.scrollIntoView({{block:'nearest'}}); $selected = 0; @get('%s?partial=1'); history.replaceState(null, '', evt.currentTarget.href); document.title = evt.currentTarget.dataset.path + ' · gitmd'"><span class="file-icon" aria-hidden="true">#</span>%s</a></li>`, index, selected_class, url, html_escape(file), url, html_escape(file))
 	}
 	strings.write_string(&builder, "\n</ol></section>")
 	return strings.clone(strings.to_string(builder))
@@ -200,23 +224,8 @@ initial_page :: proc(history: ^History, repository: ^Repository = nil, selected_
 <button type="button" aria-keyshortcuts="3" data-class:selected="$sidebar === 'outline'" data-on:click="$sidebar = 'outline'; $panel = 'sidebar'">Outline</button>
 </nav>`, path, selected_commit, hashes, sidebar, path)
 	if repository != nil {
-		strings.write_string(&builder, `
-<section class="file-browser" aria-label="Markdown files" data-show="$sidebar === 'files'">
-`)
-		strings.write_string(&builder, render_sidebar_search("files"))
-		strings.write_string(&builder, `<ol>`)
-		for file, index in repository.files {
-			selected_class := ""
-			if index == repository.selected_file {
-				selected_class = fmt.aprintf(
-					` class="selected" aria-current="page" data-init="document.getElementById('file-%d').scrollIntoView({{block:'nearest'}})"`,
-					index,
-				)
-			}
-			fmt.sbprintf(&builder, `
-<li><a id="file-%d"%s href="%s" data-path="%s" data-on:click="evt.preventDefault(); const current = evt.currentTarget.closest('.file-browser').querySelector('a.selected'); if (current !== evt.currentTarget) {{ current?.classList.remove('selected'); current?.removeAttribute('aria-current'); evt.currentTarget.classList.add('selected'); evt.currentTarget.setAttribute('aria-current', 'page') }}; evt.currentTarget.focus({{preventScroll:true}}); evt.currentTarget.scrollIntoView({{block:'nearest'}}); $selected = 0; @get('/file/%d?partial=1'); history.replaceState(null, '', evt.currentTarget.href); document.title = evt.currentTarget.dataset.path + ' · gitmd'"><span class="file-icon" aria-hidden="true">#</span>%s</a></li>`, index, selected_class, repository_url(file), html_escape(file), index, html_escape(file))
-		}
-		strings.write_string(&builder, "\n</ol></section>")
+		strings.write_string(&builder, "\n")
+		strings.write_string(&builder, render_files(repository))
 	}
 	strings.write_string(&builder, render_history(history, selected_commit))
 	strings.write_string(&builder, render_outline(&history.commits[selected_commit]))

@@ -139,7 +139,7 @@ snapshot_routes_are_fragments :: proc(t: ^testing.T) {
 	append(&history.commits, Commit{full_hash = "0123456789012345678901234567890123456789", html = "<h1>Hello</h1>"})
 	valid := route_request("GET", "/snapshot/0123456789012345678901234567890123456789", &history, "page")
 	testing.expect_value(t, valid.status, 200)
-	testing.expect(t, strings.has_prefix(valid.body, `<div id="watch"></div><article id="preview"`))
+	testing.expect(t, strings.has_prefix(valid.body, `<div id="watch" data-init="@get('/watch?path=&amp;commit=0123456789012345678901234567890123456789')"></div><article id="preview"`))
 	testing.expect(t, strings.contains(valid.body, "<h1>Hello</h1>"))
 	testing.expect(t, !strings.contains(valid.body, `id="history"`))
 	testing.expect(t, strings.contains(valid.body, `id="outline"`))
@@ -180,7 +180,7 @@ snapshot_routes_are_fragments :: proc(t: ^testing.T) {
 	testing.expect(t, strings.contains(page, `section.querySelectorAll('li').forEach(item => item.hidden = false)`))
 	testing.expect(t, strings.contains(page, `Array.from(query).every(character => (position = text.indexOf(character, position + 1)) >= 0)`))
 	testing.expect(t, !strings.contains(page, `textContent.toLowerCase().includes(query)`))
-	testing.expect(t, strings.contains(page, `@get('/snapshot/0123456789012345678901234567890123456789')`))
+	testing.expect(t, strings.contains(page, `@get('/?commit=0123456789012345678901234567890123456789&amp;partial=1')`))
 	testing.expect(t, strings.contains(page, `data-class:sidebar-hidden="!$sidebarOpen"`))
 	testing.expect(t, strings.contains(page, `role="separator" aria-label="Resize sidebar"`))
 	testing.expect(t, strings.contains(page, `data-on:pointermove__window="if ($resizing)`))
@@ -267,6 +267,11 @@ repository_lists_only_markdown_and_selects_requested_file :: proc(t: ^testing.T)
 		testing.expect(t, strings.contains(partial.body, `id="outline"`))
 		testing.expect(t, !strings.contains(partial.body, `class="file-browser"`))
 		testing.expect(t, !strings.contains(partial.body, "<html"))
+		fresh_path := test_path(root, "fresh.md")
+		must_write(t, fresh_path, "# Fresh\n")
+		fresh := route_request("GET", "/fresh.md?partial=1", &history, "page", &repository)
+		testing.expect_value(t, fresh.status, 200)
+		testing.expect(t, strings.contains(fresh.body, `<h1 id="fresh">Fresh</h1>`))
 	}
 	_ = path
 }
@@ -278,7 +283,7 @@ working_snapshot_starts_watch_stream_and_formats_updates :: proc(t: ^testing.T) 
 	append(&history.commits, Commit{working = true})
 	fragment := watch_fragment(&history, 0)
 	testing.expect(t, strings.contains(fragment, `id="watch"`))
-	testing.expect(t, strings.contains(fragment, `@get('/watch?path=docs%2fa%20guide.md')`))
+	testing.expect(t, strings.contains(fragment, `@get('/watch?path=docs%2fa%20guide.md&amp;commit=working')`))
 	event := sse_patch_elements("<article id=\"preview\">one\ntwo</article>")
 	testing.expect_value(t, event, "event: datastar-patch-elements\ndata: elements <article id=\"preview\">one\ndata: elements two</article>\n\n")
 	repository := Repository{files = make([dynamic]string, 0)}
@@ -325,6 +330,57 @@ watch_stream_pushes_changed_file :: proc(t: ^testing.T) {
 	must_write(t, path, "# Watched change\n")
 	update, received_update := receive_until(client, "Watched change")
 	testing.expectf(t, received_update, "changed watch event missing: %s", update)
+	must_git(t, root, []string{"add", "--", "docs with spaces/new name.md"})
+	must_git(t, root, []string{"commit", "-q", "-m", "watched commit"})
+	commit_update, received_commit := receive_until(client, "watched commit")
+	testing.expectf(t, received_commit, "commit watch event missing: %s", commit_update)
+	must_write(t, test_path(root, "live.md"), "# Live file\n")
+	files_update, received_file := receive_until(client, "live.md")
+	testing.expectf(t, received_file, "file-list watch event missing: %s", files_update)
+}
+
+@(test)
+watch_stream_keeps_committed_snapshot_fixed :: proc(t: ^testing.T) {
+	root, path := make_fixture(t)
+	defer os.remove_all(root)
+	history, message, loaded := load_history_snapshots(root, "docs with spaces/new name.md")
+	testing.expectf(t, loaded, "load_history_snapshots failed: %s", message)
+	if !loaded { return }
+	selected_hash := strings.clone(history.commits[1].full_hash)
+	listener, listen_err := net.listen_tcp({net.IP4_Loopback, 0})
+	testing.expect_value(t, listen_err, nil)
+	if listen_err != nil { return }
+	defer net.close(listener)
+	endpoint, endpoint_err := net.bound_endpoint(listener)
+	testing.expect_value(t, endpoint_err, nil)
+	if endpoint_err != nil { return }
+	client, dial_err := net.dial_tcp(endpoint)
+	testing.expect_value(t, dial_err, nil)
+	if dial_err != nil { return }
+	defer net.close(client)
+	server, _, accept_err := net.accept_tcp(listener)
+	testing.expect_value(t, accept_err, nil)
+	if accept_err != nil { return }
+	net.set_option(client, .Receive_Timeout, 3 * time.Second)
+	server_running = true
+	watcher := thread.create_and_start_with_poly_data(
+		Watch_Request{socket = server, repo_root = root, path = "docs with spaces/new name.md", commit_hash = selected_hash},
+		watch_file,
+	)
+	defer {
+		server_running = false
+		thread.join(watcher)
+		thread.destroy(watcher)
+	}
+	initial, received_initial := receive_until(client, "Second snapshot.")
+	testing.expectf(t, received_initial, "initial fixed snapshot event missing: %s", initial)
+	must_write(t, path, "# Drifting working tree\n")
+	must_git(t, root, []string{"add", "--", "docs with spaces/new name.md"})
+	must_git(t, root, []string{"commit", "-q", "-m", "commit after fixed selection"})
+	update, received_update := receive_until(client, "commit after fixed selection")
+	testing.expectf(t, received_update, "fixed snapshot history update missing: %s", update)
+	testing.expect(t, strings.contains(update, "Second snapshot."))
+	testing.expect(t, !strings.contains(update, "Drifting working tree"))
 }
 
 @(test)
@@ -372,7 +428,7 @@ repository_page_has_file_and_history_modes :: proc(t: ^testing.T) {
 	testing.expect(t, strings.contains(page, `aria-current="page"`))
 	testing.expect(t, strings.contains(page, `id="file-1" class="selected" aria-current="page" data-init="document.getElementById('file-1').scrollIntoView({block:'nearest'})"`))
 	testing.expect(t, strings.contains(page, `evt.currentTarget.focus({preventScroll:true}); evt.currentTarget.scrollIntoView({block:'nearest'})`))
-	testing.expect(t, strings.contains(page, `@get('/file/1?partial=1')`))
+	testing.expect(t, strings.contains(page, `@get('/docs/guide.md?partial=1')`))
 	testing.expect(t, strings.contains(page, `id="commit-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" class="selected" aria-current="page"`))
 	testing.expect(t, !strings.contains(page, `data-class:selected="$selected === 1"`))
 	testing.expect(t, strings.contains(page, `current?.classList.remove('selected')`))

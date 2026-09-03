@@ -49,8 +49,8 @@ gitmd docs/S00.01-worker.md
   - Files lists tracked and untracked `.md` and `.markdown` files.
   - History lists the selected file's working tree and committed revisions.
   - Outline links to the selected file's headings.
-- See working-tree changes update automatically, or click a commit to view its
-  fixed snapshot.
+- See working-tree changes, commits, and Markdown file-list changes update
+  automatically, or click a commit to view its fixed snapshot.
 - Select the sidebar or document pane with `←`/`h` and `→`/`l`.
 - In the sidebar, move through the active list with `↑`/`k` and `↓`/`j`.
 - In the document pane, scroll with `↑`/`k` and `↓`/`j`.
@@ -73,9 +73,9 @@ gitmd docs/S00.01-worker.md
 - Runs a minimal Odin `core:net` HTTP server on `127.0.0.1`.
 - Derives a stable localhost port from the repository path, allowing multiple
   repositories to use repeatable URLs at the same time.
-- Watches the selected working-tree file with a server-sent event stream and
-  uses Datastar to morph refreshed `#preview` and `#outline` fragments into the
-  page.
+- Watches repository state and the selected file with a server-sent event
+  stream and uses Datastar to morph refreshed Files, History, `#preview`, and
+  `#outline` fragments into the page.
 - Pins and embeds Datastar v1.0.3 in the executable. Its license is stored in
   [`third_party/datastar/LICENSE.md`](third_party/datastar/LICENSE.md).
 - Never checks out a revision or writes to the repository.
