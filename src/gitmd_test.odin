@@ -154,6 +154,7 @@ snapshot_routes_are_fragments :: proc(t: ^testing.T) {
 	testing.expect(t, strings.contains(page, `evt.key === '/'`))
 	testing.expect(t, strings.contains(page, `evt.key === 'Escape'`))
 	testing.expect(t, strings.contains(page, `class="sidebar-search"`))
+	testing.expect(t, strings.contains(page, `if (!['Escape','ArrowUp','ArrowDown'].includes(evt.key)) evt.stopPropagation()`))
 	testing.expect(t, strings.contains(page, `data-on:input="const query = evt.currentTarget.value.toLowerCase()`))
 	testing.expect(t, strings.contains(page, `@get('/snapshot/0123456789012345678901234567890123456789')`))
 	testing.expect(t, strings.contains(page, `data-class:sidebar-hidden="!$sidebarOpen"`))
