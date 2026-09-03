@@ -4,45 +4,66 @@
 - Compare the working-tree file with its committed history.
 - Render GitHub Flavored Markdown in a two-pane localhost view.
 
-## Install on macOS
+## Build locally on macOS
 
 - Install the runtime/build dependencies with Homebrew:
 
 ```fish
 brew install odin cmark-gfm
+```
+
+- Clean any previous build:
+
+```fish
+make clean
+```
+
+- Compile the app if needed, then run it:
+
+```fish
+make
+```
+
+- Run the existing build, compiling it first if needed:
+
+```fish
+make run
+```
+
+- Run the tests:
+
+```fish
 make test
 ```
 
-- Define an autoloaded Fish function instead of adding `~/.local/bin` to
-  `PATH`. Use the absolute path to your `gitmd` checkout:
+## Optional Fish function
+
+- Install an autoloaded Fish function to make `gitmd` available globally:
 
 ```fish
-function gitmd
-    make -C /absolute/path/to/gitmd install
-    or return
-    command ~/.local/bin/gitmd $argv
-end
-funcsave gitmd
+make fish
 ```
 
-- The function rebuilds and installs `gitmd` before every launch.
-- `make install` uses `~/.local/bin` by default. Set `PREFIX` when invoking
-  `make` to choose another installation directory.
+- The function compiles the app in the current `gitmd` checkout if needed,
+  then runs that binary from your current directory.
 
 ## Use
 
 - Serve the repository containing the current directory:
 
 ```fish
-gitmd
+./build/gitmd
 ```
 
 - Pass a repository directory or open a particular Markdown file:
 
 ```fish
-gitmd /path/to/repository
-gitmd docs/S00.01-worker.md
+./build/gitmd /path/to/repository
+./build/gitmd docs/S00.01-worker.md
 ```
+
+- If you installed the optional Fish function, use `gitmd` from any directory.
+  Arguments are passed through to the app.
 
 - Open the localhost URL printed by the CLI.
 - Switch among Files, History, and Outline with `1`, `2`, and `3`.

@@ -1,10 +1,12 @@
 ODIN ?= odin
 BIN := build/gitmd
-PREFIX ?= $(HOME)/.local
+FISH_FUNCTIONS_DIR ?= $(HOME)/.config/fish/functions
 
-.PHONY: all clean install test
+.PHONY: all build clean fish run test
 
-all: $(BIN)
+all: run
+
+build: $(BIN)
 
 $(BIN): $(shell find src -type f)
 	@mkdir -p build
@@ -13,9 +15,17 @@ $(BIN): $(shell find src -type f)
 test:
 	$(ODIN) test src -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
 
-install: $(BIN)
-	@mkdir -p "$(PREFIX)/bin"
-	install -m 0755 $(BIN) "$(PREFIX)/bin/gitmd"
+run: $(BIN)
+	$(BIN)
+
+fish:
+	@mkdir -p "$(FISH_FUNCTIONS_DIR)"
+	@printf '%s\n' \
+		'function gitmd' \
+		'    make -C "$(CURDIR)" build' \
+		'    or return' \
+		'    command "$(CURDIR)/$(BIN)" $$argv' \
+		'end' > "$(FISH_FUNCTIONS_DIR)/gitmd.fish"
 
 clean:
 	rm -f $(BIN) src.bin
