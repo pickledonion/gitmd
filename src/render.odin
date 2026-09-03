@@ -125,7 +125,7 @@ render_outline :: proc(commit: ^Commit) -> string {
 		text := strip_html_tags(commit.html[inner_start:inner_end])
 		fmt.sbprintf(
 			&builder,
-			`<li class="outline-level-%c"><a href="#%s">%s</a></li>`,
+			`<li class="outline-level-%c"><a href="#%s" data-on:click="if (evt.button !== 0 || evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey) return; evt.preventDefault(); history.pushState(null, '', evt.currentTarget.href); document.getElementById(decodeURIComponent(evt.currentTarget.hash.slice(1)))?.scrollIntoView()">%s</a></li>`,
 			level,
 			commit.html[id_start:id_end],
 			html_escape(text),
