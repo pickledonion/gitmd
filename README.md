@@ -18,16 +18,22 @@ brew install odin cmark-gfm
 make clean
 ```
 
+- Compile the app without running it:
+
+```fish
+make compile
+```
+
+- Run the existing build without compiling it:
+
+```fish
+make run
+```
+
 - Compile the app if needed, then run it:
 
 ```fish
 make
-```
-
-- Run the existing build, compiling it first if needed:
-
-```fish
-make run
 ```
 
 - Run the tests:
