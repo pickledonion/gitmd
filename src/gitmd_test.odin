@@ -1,7 +1,6 @@
 package main
 
 import "core:os"
-import "core:dynlib"
 import "core:net"
 import "core:path/filepath"
 import "core:strings"
@@ -97,8 +96,6 @@ gfm_extensions_and_safety :: proc(t: ^testing.T) {
 	api, message, ok := load_cmark()
 	testing.expectf(t, ok, "%s", message)
 	if !ok { return }
-	defer dynlib.unload_library(api.ext_library)
-	defer dynlib.unload_library(api.core_library)
 	markdown := "| A | B |\n|---|---|\n| 1 | 2 |\n\n- [x] done\n\n~~gone~~\n\n```odin\nx := 1\n```\n\n<script>alert(1)</script>\n\n[bad](javascript:alert(1))\n"
 	html, rendered := render_markdown(&api, markdown)
 	testing.expect(t, rendered)
@@ -115,8 +112,6 @@ heading_and_explicit_anchor_fragments_are_rendered :: proc(t: ^testing.T) {
 	api, message, ok := load_cmark()
 	testing.expectf(t, ok, "%s", message)
 	if !ok { return }
-	defer dynlib.unload_library(api.ext_library)
-	defer dynlib.unload_library(api.core_library)
 	markdown := "# Hello, World!\n\n# Hello World\n\n- <a id=\"-p01-worker-s01s0001-workermd\"></a> worker\n"
 	html, rendered := render_markdown(&api, markdown)
 	testing.expect(t, rendered)
@@ -130,8 +125,6 @@ safe_pre_blocks_render_as_literal_code :: proc(t: ^testing.T) {
 	api, message, ok := load_cmark()
 	testing.expectf(t, ok, "%s", message)
 	if !ok { return }
-	defer dynlib.unload_library(api.ext_library)
-	defer dynlib.unload_library(api.core_library)
 	markdown := "<pre>\nline one\n```example\n<script>alert(1)</script>\n```\n</pre>\n"
 	html, rendered := render_markdown(&api, markdown)
 	testing.expect(t, rendered)

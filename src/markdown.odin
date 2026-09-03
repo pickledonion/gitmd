@@ -5,6 +5,7 @@ import "core:encoding/entity"
 import "core:fmt"
 import "core:os"
 import "core:strings"
+import "core:sync"
 
 Cmark_API :: struct {
 	core_library: dynlib.Library,
@@ -27,6 +28,10 @@ Cmark_Mem :: struct {
 	realloc: proc "c" (pointer: rawptr, size: uintptr) -> rawptr,
 	free:    proc "c" (pointer: rawptr),
 }
+
+cmark_api: Cmark_API
+cmark_api_loaded: bool
+cmark_api_mutex: sync.Mutex
 
 load_symbol :: proc(library: dynlib.Library, name: string) -> (rawptr, bool) {
 	return dynlib.symbol_address(library, name)
@@ -61,11 +66,21 @@ load_cmark_from :: proc(core_path, extensions_path: string) -> (Cmark_API, bool)
 }
 
 load_cmark :: proc() -> (Cmark_API, string, bool) {
+	sync.mutex_lock(&cmark_api_mutex)
+	defer sync.mutex_unlock(&cmark_api_mutex)
+	if cmark_api_loaded {
+		return cmark_api, "", true
+	}
 	if custom := os.get_env("GITMD_CMARK_LIBDIR", context.temp_allocator); len(custom) > 0 {
 		core_path := filepath_join(custom, "libcmark-gfm.dylib")
 		ext_path := filepath_join(custom, "libcmark-gfm-extensions.dylib")
 		api, ok := load_cmark_from(core_path, ext_path)
-		if ok { return api, "", true }
+		if ok {
+			api.ensure_extensions()
+			cmark_api = api
+			cmark_api_loaded = true
+			return cmark_api, "", true
+		}
 	}
 	prefixes := []string{"/opt/homebrew/opt/cmark-gfm/lib", "/usr/local/opt/cmark-gfm/lib"}
 	for prefix in prefixes {
@@ -73,7 +88,12 @@ load_cmark :: proc() -> (Cmark_API, string, bool) {
 			filepath_join(prefix, "libcmark-gfm.dylib"),
 			filepath_join(prefix, "libcmark-gfm-extensions.dylib"),
 		)
-		if ok { return api, "", true }
+		if ok {
+			api.ensure_extensions()
+			cmark_api = api
+			cmark_api_loaded = true
+			return cmark_api, "", true
+		}
 	}
 	return {}, "cmark-gfm not found; install it with: brew install cmark-gfm", false
 }
@@ -230,7 +250,6 @@ add_heading_ids :: proc(html: string) -> string {
 }
 
 render_markdown :: proc(api: ^Cmark_API, markdown: string) -> (string, bool) {
-	api.ensure_extensions()
 	prepared_markdown := convert_safe_pre_blocks(markdown)
 	protected_markdown, anchors := protect_safe_anchors(prepared_markdown)
 	parser := api.parser_new(0)
@@ -262,8 +281,6 @@ render_markdown :: proc(api: ^Cmark_API, markdown: string) -> (string, bool) {
 render_all_snapshots :: proc(history: ^History) -> (string, bool) {
 	api, message, loaded := load_cmark()
 	if !loaded { return message, false }
-	defer dynlib.unload_library(api.ext_library)
-	defer dynlib.unload_library(api.core_library)
 	for &commit in history.commits {
 		html, rendered := render_markdown(&api, commit.markdown)
 		if !rendered {
@@ -290,8 +307,6 @@ render_history_snapshot :: proc(history: ^History, index: int) -> (string, bool)
 	}
 	api, message, loaded := load_cmark()
 	if !loaded { return message, false }
-	defer dynlib.unload_library(api.ext_library)
-	defer dynlib.unload_library(api.core_library)
 	html, rendered := render_markdown(&api, commit.markdown)
 	if !rendered {
 		return "cmark-gfm failed to render a committed snapshot", false
