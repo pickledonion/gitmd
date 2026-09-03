@@ -13,6 +13,7 @@ Commit :: struct {
 	blob_hash:   string,
 	markdown:    string,
 	html:        string,
+	working:     bool,
 }
 
 History :: struct {
@@ -110,9 +111,11 @@ load_repository :: proc(input_path: string) -> (Repository, string, bool) {
 		return {}, "not inside a Git repository", false
 	}
 	repo_root := strings.clone(trim_command_output(root_result.stdout))
-	listing := run_command(repo_root, []string{"/usr/bin/git", "ls-tree", "-r", "--name-only", "-z", "HEAD"})
+	listing := run_command(repo_root, []string{
+		"/usr/bin/git", "ls-files", "--cached", "--others", "--exclude-standard", "-z",
+	})
 	if !listing.ok {
-		return {}, "could not list committed files", false
+		return {}, "could not list repository files", false
 	}
 	files := make([dynamic]string, 0)
 	position := 0
@@ -128,7 +131,7 @@ load_repository :: proc(input_path: string) -> (Repository, string, bool) {
 		position = end + 1
 	}
 	if len(files) == 0 {
-		return {}, "repository has no committed Markdown files", false
+		return {}, "repository has no Markdown files", false
 	}
 	selected := 0
 	if !is_directory {
@@ -145,7 +148,7 @@ load_repository :: proc(input_path: string) -> (Repository, string, bool) {
 			}
 		}
 		if !found {
-			return {}, "path is not a committed Markdown file", false
+			return {}, "path is not a Markdown file in the repository", false
 		}
 	} else {
 		for path, index in files {
@@ -245,17 +248,50 @@ load_blob :: proc(repo_root: string, commit: ^Commit) -> (string, bool) {
 	return "", true
 }
 
+load_working_snapshot :: proc(repo_root, relative_path: string) -> (Commit, bool) {
+	absolute_path, path_err := filepath.join([]string{repo_root, relative_path})
+	if path_err != nil {
+		return {}, false
+	}
+	contents, read_err := os.read_entire_file(absolute_path, context.allocator)
+	if read_err != nil {
+		return {}, false
+	}
+	return Commit{
+		full_hash = "working",
+		short_hash = "working",
+		subject = "Working tree",
+		path = strings.clone(relative_path),
+		markdown = string(contents),
+		working = true,
+	}, true
+}
+
+load_history_snapshots :: proc(repo_root, relative_path: string) -> (History, string, bool) {
+	commits, history_message, committed := load_commit_list(repo_root, relative_path)
+	working, has_working := load_working_snapshot(repo_root, relative_path)
+	if !committed && !has_working {
+		return {}, history_message, false
+	}
+	all := make([dynamic]Commit, 0, len(commits) + 1)
+	if has_working {
+		append(&all, working)
+	}
+	append(&all, ..commits[:])
+	return History{repo_root = repo_root, path = relative_path, commits = all}, "", true
+}
+
 load_history :: proc(input_path: string) -> (History, string, bool) {
 	repo_root, relative_path, message, resolved := resolve_repo_path(input_path)
 	if !resolved {
 		return {}, message, false
 	}
-	commits, history_message, loaded := load_commit_list(repo_root, relative_path)
+	history, history_message, loaded := load_history_snapshots(repo_root, relative_path)
 	if !loaded {
 		return {}, history_message, false
 	}
-	history := History{repo_root = repo_root, path = relative_path, commits = commits}
 	for &commit in history.commits {
+		if commit.working { continue }
 		blob_message, blob_loaded := load_blob(repo_root, &commit)
 		if !blob_loaded {
 			return {}, blob_message, false
@@ -269,9 +305,5 @@ load_repository_history :: proc(repository: ^Repository, index: int) -> (History
 		return {}, "Markdown file does not exist", false
 	}
 	path := repository.files[index]
-	commits, message, loaded := load_commit_list(repository.repo_root, path)
-	if !loaded {
-		return {}, message, false
-	}
-	return History{repo_root = repository.repo_root, path = path, commits = commits}, "", true
+	return load_history_snapshots(repository.repo_root, path)
 }

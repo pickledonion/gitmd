@@ -2,9 +2,12 @@ package main
 
 import "core:os"
 import "core:dynlib"
+import "core:net"
 import "core:path/filepath"
 import "core:strings"
 import "core:testing"
+import "core:thread"
+import "core:time"
 
 test_path :: proc(parts: ..string) -> string {
 	path, _ := filepath.join(parts[:])
@@ -26,6 +29,22 @@ must_write :: proc(t: ^testing.T, path, contents: string) {
 	if err := os.write_entire_file(path, contents); err != nil {
 		testing.fail_now(t, "could not write fixture")
 	}
+}
+
+receive_until :: proc(socket: net.TCP_Socket, needle: string) -> (string, bool) {
+	builder := strings.builder_make()
+	defer strings.builder_destroy(&builder)
+	buffer: [16384]byte
+	for _ in 0 ..< 8 {
+		n, err := net.recv_tcp(socket, buffer[:])
+		if err != nil || n <= 0 { break }
+		strings.write_string(&builder, string(buffer[:n]))
+		received := strings.to_string(builder)
+		if strings.contains(received, needle) {
+			return strings.clone(received), true
+		}
+	}
+	return strings.clone(strings.to_string(builder)), false
 }
 
 make_fixture :: proc(t: ^testing.T) -> (root, current_path: string) {
@@ -59,16 +78,18 @@ history_metadata_snapshots_and_rename :: proc(t: ^testing.T) {
 	history, message, ok := load_history(path)
 	testing.expectf(t, ok, "load_history failed: %s", message)
 	if !ok { return }
-	testing.expect_value(t, len(history.commits), 3)
-	testing.expect_value(t, history.commits[0].subject, "newest subject")
-	testing.expect_value(t, history.commits[1].subject, "rename subject")
-	testing.expect_value(t, history.commits[2].subject, "first subject")
+	testing.expect_value(t, len(history.commits), 4)
+	testing.expect(t, history.commits[0].working)
+	testing.expect_value(t, history.commits[0].subject, "Working tree")
+	testing.expect_value(t, history.commits[1].subject, "newest subject")
+	testing.expect_value(t, history.commits[2].subject, "rename subject")
+	testing.expect_value(t, history.commits[3].subject, "first subject")
 	testing.expect_value(t, history.commits[0].path, "docs with spaces/new name.md")
-	testing.expect_value(t, history.commits[2].path, "docs with spaces/old name.md")
+	testing.expect_value(t, history.commits[3].path, "docs with spaces/old name.md")
 	testing.expect(t, strings.contains(history.commits[0].markdown, "Second snapshot."))
-	testing.expect(t, !strings.contains(history.commits[2].markdown, "Second snapshot."))
-	testing.expect_value(t, len(history.commits[0].full_hash), 40)
-	testing.expect(t, len(history.commits[0].author_date) >= 10)
+	testing.expect(t, !strings.contains(history.commits[3].markdown, "Second snapshot."))
+	testing.expect_value(t, len(history.commits[1].full_hash), 40)
+	testing.expect(t, len(history.commits[1].author_date) >= 10)
 }
 
 @(test)
@@ -125,7 +146,7 @@ snapshot_routes_are_fragments :: proc(t: ^testing.T) {
 	append(&history.commits, Commit{full_hash = "0123456789012345678901234567890123456789", html = "<h1>Hello</h1>"})
 	valid := route_request("GET", "/snapshot/0123456789012345678901234567890123456789", &history, "page")
 	testing.expect_value(t, valid.status, 200)
-	testing.expect(t, strings.has_prefix(valid.body, "<article id=\"preview\""))
+	testing.expect(t, strings.has_prefix(valid.body, `<div id="watch"></div><article id="preview"`))
 	testing.expect(t, strings.contains(valid.body, "<h1>Hello</h1>"))
 	testing.expect(t, !strings.contains(valid.body, `id="history"`))
 	testing.expect(t, strings.contains(valid.body, `id="outline"`))
@@ -137,7 +158,9 @@ snapshot_routes_are_fragments :: proc(t: ^testing.T) {
 	testing.expect(t, strings.contains(page, "data-signals=\"{selected: 0"))
 	testing.expect(t, strings.contains(page, "sidebarOpen: true"))
 	testing.expect(t, strings.contains(page, "resizing: false"))
-	testing.expect(t, strings.contains(page, "searching: false"))
+	testing.expect(t, strings.contains(page, "filesSearching: false"))
+	testing.expect(t, strings.contains(page, "historySearching: false"))
+	testing.expect(t, strings.contains(page, "outlineSearching: false"))
 	testing.expect(t, strings.contains(page, "panel: 'sidebar'"))
 	testing.expect(t, strings.contains(page, "fileTimer: 0"))
 	testing.expect(t, strings.contains(page, "evt.metaKey"))
@@ -154,8 +177,14 @@ snapshot_routes_are_fragments :: proc(t: ^testing.T) {
 	testing.expect(t, strings.contains(page, `evt.key === '/'`))
 	testing.expect(t, strings.contains(page, `evt.key === 'Escape'`))
 	testing.expect(t, strings.contains(page, `class="sidebar-search"`))
+	testing.expect(t, strings.contains(page, `id="history-search-input"`))
+	testing.expect(t, strings.contains(page, `id="outline-search-input"`))
+	testing.expect(t, strings.contains(page, `data-show="$historySearching"`))
+	testing.expect(t, strings.contains(page, `data-show="$outlineSearching"`))
 	testing.expect(t, strings.contains(page, `if (!['Escape','ArrowUp','ArrowDown'].includes(evt.key)) evt.stopPropagation()`))
 	testing.expect(t, strings.contains(page, `data-on:input="const query = evt.currentTarget.value.toLowerCase()`))
+	testing.expect(t, strings.contains(page, `evt.currentTarget.closest('section').querySelectorAll('li')`))
+	testing.expect(t, strings.contains(page, `section.querySelectorAll('li').forEach(item => item.hidden = false)`))
 	testing.expect(t, strings.contains(page, `Array.from(query).every(character => (position = text.indexOf(character, position + 1)) >= 0)`))
 	testing.expect(t, !strings.contains(page, `textContent.toLowerCase().includes(query)`))
 	testing.expect(t, strings.contains(page, `@get('/snapshot/0123456789012345678901234567890123456789')`))
@@ -187,13 +216,18 @@ git_operations_leave_dirty_tree_unchanged :: proc(t: ^testing.T) {
 }
 
 @(test)
-invalid_inputs_are_rejected :: proc(t: ^testing.T) {
+untracked_markdown_and_invalid_inputs :: proc(t: ^testing.T) {
 	root, path := make_fixture(t)
 	defer os.remove_all(root)
 	untracked := test_path(root, "untracked.md")
 	must_write(t, untracked, "nothing committed\n")
-	_, _, tracked := load_history(untracked)
-	testing.expect(t, !tracked)
+	history, message, loaded := load_history(untracked)
+	testing.expectf(t, loaded, "load_history failed: %s", message)
+	if loaded {
+		testing.expect_value(t, len(history.commits), 1)
+		testing.expect(t, history.commits[0].working)
+		testing.expect_value(t, history.commits[0].markdown, "nothing committed\n")
+	}
 	outside, err := os.make_directory_temp("", "gitmd-nonrepo-*", context.allocator)
 	if err != nil { testing.fail_now(t) }
 	defer os.remove_all(outside)
@@ -227,7 +261,8 @@ repository_lists_only_markdown_and_selects_requested_file :: proc(t: ^testing.T)
 	testing.expectf(t, history_ok, "load_repository_history failed: %s", history_message)
 	if history_ok {
 		testing.expect_value(t, history.path, "notes.markdown")
-		testing.expect_value(t, history.commits[0].markdown, "")
+		testing.expect(t, history.commits[0].working)
+		testing.expect_value(t, history.commits[0].markdown, "# Notes\n")
 		render_message, rendered := render_history_snapshot(&history, 0)
 		testing.expectf(t, rendered, "render_history_snapshot failed: %s", render_message)
 		testing.expect(t, strings.contains(history.commits[0].html, `<h1 id="notes">Notes</h1>`))
@@ -241,6 +276,62 @@ repository_lists_only_markdown_and_selects_requested_file :: proc(t: ^testing.T)
 		testing.expect(t, !strings.contains(partial.body, "<html"))
 	}
 	_ = path
+}
+
+@(test)
+working_snapshot_starts_watch_stream_and_formats_updates :: proc(t: ^testing.T) {
+	history := History{path = "docs/a guide.md", commits = make([dynamic]Commit, 0)}
+	defer delete(history.commits)
+	append(&history.commits, Commit{working = true})
+	fragment := watch_fragment(&history, 0)
+	testing.expect(t, strings.contains(fragment, `id="watch"`))
+	testing.expect(t, strings.contains(fragment, `@get('/watch?path=docs%2fa%20guide.md')`))
+	event := sse_patch_elements("<article id=\"preview\">one\ntwo</article>")
+	testing.expect_value(t, event, "event: datastar-patch-elements\ndata: elements <article id=\"preview\">one\ndata: elements two</article>\n\n")
+	repository := Repository{files = make([dynamic]string, 0)}
+	defer delete(repository.files)
+	append(&repository.files, "docs/a guide.md")
+	path, valid := watch_request_path("/watch?path=docs%2Fa%20guide.md", &repository)
+	testing.expect(t, valid)
+	testing.expect_value(t, path, "docs/a guide.md")
+	_, traversal := watch_request_path("/watch?path=..%2Fsecret.md", &repository)
+	testing.expect(t, !traversal)
+}
+
+@(test)
+watch_stream_pushes_changed_file :: proc(t: ^testing.T) {
+	root, path := make_fixture(t)
+	defer os.remove_all(root)
+	listener, listen_err := net.listen_tcp({net.IP4_Loopback, 0})
+	testing.expect_value(t, listen_err, nil)
+	if listen_err != nil { return }
+	defer net.close(listener)
+	endpoint, endpoint_err := net.bound_endpoint(listener)
+	testing.expect_value(t, endpoint_err, nil)
+	if endpoint_err != nil { return }
+	client, dial_err := net.dial_tcp(endpoint)
+	testing.expect_value(t, dial_err, nil)
+	if dial_err != nil { return }
+	defer net.close(client)
+	server, _, accept_err := net.accept_tcp(listener)
+	testing.expect_value(t, accept_err, nil)
+	if accept_err != nil { return }
+	net.set_option(client, .Receive_Timeout, 3 * time.Second)
+	server_running = true
+	watcher := thread.create_and_start_with_poly_data(
+		Watch_Request{socket = server, repo_root = root, path = "docs with spaces/new name.md"},
+		watch_file,
+	)
+	defer {
+		server_running = false
+		thread.join(watcher)
+		thread.destroy(watcher)
+	}
+	initial, received_initial := receive_until(client, "Second snapshot.")
+	testing.expectf(t, received_initial, "initial watch event missing: %s", initial)
+	must_write(t, path, "# Watched change\n")
+	update, received_update := receive_until(client, "Watched change")
+	testing.expectf(t, received_update, "changed watch event missing: %s", update)
 }
 
 @(test)
@@ -270,6 +361,13 @@ repository_page_has_file_and_history_modes :: proc(t: ^testing.T) {
 	testing.expect(t, strings.contains(page, `aria-keyshortcuts="2"`))
 	testing.expect(t, strings.contains(page, `aria-keyshortcuts="3"`))
 	testing.expect(t, strings.contains(page, `aria-label="Document outline"`))
+	files_position := strings.index(page, `class="file-browser"`)
+	search_position := strings.index(page, `id="files-search-input"`)
+	list_position := strings.index(page, `<ol>`)
+	testing.expect(t, files_position >= 0 && files_position < search_position && search_position < list_position)
+	testing.expect(t, strings.contains(page, `id="history-search-input"`))
+	testing.expect(t, strings.contains(page, `id="outline-search-input"`))
+	testing.expect(t, strings.contains(page, `data-show="$filesSearching"`))
 	testing.expect(t, strings.contains(page, `<li class="outline-level-1"><a href="#older-guide">Older guide</a></li>`))
 	testing.expect(t, strings.contains(page, `<li class="outline-level-2"><a href="#install">Install &amp; run</a></li>`))
 	testing.expect(t, strings.contains(STYLESHEET, `.file-browser a:hover,.history a:hover,.outline a:hover`))
@@ -299,4 +397,12 @@ repository_urls_preserve_directories_and_escape_segments :: proc(t: ^testing.T) 
 commit_timestamp_uses_compact_local_format :: proc(t: ^testing.T) {
 	testing.expect_value(t, display_timestamp("2026-10-31T14:31:52+01:00"), "2026.10.31 14:31")
 	testing.expect_value(t, display_timestamp("unknown"), "unknown")
+}
+
+@(test)
+repository_ports_are_stable_and_path_specific :: proc(t: ^testing.T) {
+	first := repository_port("/Users/example/one/gitmd")
+	testing.expect_value(t, first, repository_port("/Users/example/one/gitmd"))
+	testing.expect(t, first >= 20000 && first < 40000)
+	testing.expect(t, first != repository_port("/Users/example/two/gitmd"))
 }

@@ -2,8 +2,12 @@ package main
 
 import "core:fmt"
 import "core:net"
+import "core:os"
+import "core:path/filepath"
 import "core:strings"
 import "core:sys/posix"
+import "core:thread"
+import "core:time"
 
 Http_Response :: struct {
 	status:       int,
@@ -141,12 +145,87 @@ send_response :: proc(socket: net.TCP_Socket, response: Http_Response) {
 	}
 }
 
-handle_connection :: proc(socket: net.TCP_Socket, history: ^History, page: string, repository: ^Repository = nil) {
+Watch_Request :: struct {
+	socket:    net.TCP_Socket,
+	repo_root: string,
+	path:      string,
+}
+
+watch_request_path :: proc(target: string, repository: ^Repository) -> (string, bool) {
+	if repository == nil { return "", false }
+	raw_path := query_parameter(target, "path")
+	path, decoded := net.percent_decode(raw_path, context.temp_allocator)
+	if !decoded { return "", false }
+	for file in repository.files {
+		if file == path { return file, true }
+	}
+	return "", false
+}
+
+missing_working_fragments :: proc() -> string {
+	return strings.concatenate({
+		`<article id="preview" class="markdown-body" aria-label="Markdown preview"><p>File is not available in the working tree.</p></article><section id="outline" class="outline" aria-label="Document outline" data-show="$sidebar === 'outline'">`,
+		render_sidebar_search("outline"),
+		`<ol></ol></section>`,
+	})
+}
+
+render_working_fragments :: proc(markdown: string) -> (string, bool) {
+	history := History{commits = make([dynamic]Commit, 0, 1)}
+	defer delete(history.commits)
+	append(&history.commits, Commit{markdown = markdown, working = true})
+	_, rendered := render_history_snapshot(&history, 0)
+	if !rendered { return "", false }
+	return strings.concatenate({
+		preview_fragment(&history.commits[0]),
+		render_outline(&history.commits[0]),
+	}), true
+}
+
+watch_file :: proc(request: Watch_Request) {
+	defer net.close(request.socket)
+	header := "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nConnection: keep-alive\r\nX-Accel-Buffering: no\r\nX-Content-Type-Options: nosniff\r\n\r\n"
+	if !send_all(request.socket, header) { return }
+	absolute_path, path_err := filepath.join([]string{request.repo_root, request.path})
+	if path_err != nil { return }
+	previous := ""
+	previous_exists := false
+	defer if len(previous) > 0 { delete(previous) }
+	checks := 0
+	for server_running {
+		contents, read_err := os.read_entire_file(absolute_path, context.allocator)
+		if read_err == nil {
+			markdown := string(contents)
+			if !previous_exists || markdown != previous {
+				fragments, rendered := render_working_fragments(markdown)
+				if rendered && !send_all(request.socket, sse_patch_elements(fragments)) {
+					delete(contents)
+					return
+				}
+				if len(previous) > 0 { delete(previous) }
+				previous = strings.clone(markdown)
+				previous_exists = true
+			}
+			delete(contents)
+		} else if previous_exists {
+			if !send_all(request.socket, sse_patch_elements(missing_working_fragments())) { return }
+			previous_exists = false
+		}
+		checks += 1
+		if checks >= 60 {
+			if !send_all(request.socket, ": keepalive\n\n") { return }
+			checks = 0
+		}
+		time.sleep(250 * time.Millisecond)
+	}
+}
+
+handle_connection :: proc(socket: net.TCP_Socket, history: ^History, page: string, repository: ^Repository = nil) -> bool {
 	buffer: [16384]byte
 	total := 0
 	for total < len(buffer) {
 		n, err := net.recv_tcp(socket, buffer[total:])
-		if err != nil || n <= 0 { return }
+		if err != nil || n <= 0 { return true }
 		total += n
 		request := string(buffer[:total])
 		if strings.contains(request, "\r\n\r\n") { break }
@@ -155,18 +234,36 @@ handle_connection :: proc(socket: net.TCP_Socket, history: ^History, page: strin
 	line_end := strings.index(request, "\r\n")
 	if line_end < 0 {
 		send_response(socket, {status = 400, reason = "Bad Request", content_type = "text/plain; charset=utf-8", body = "bad request\n"})
-		return
+		return true
 	}
 	parts := strings.split(request[:line_end], " ")
 	if len(parts) != 3 || !strings.has_prefix(parts[2], "HTTP/1.") {
 		send_response(socket, {status = 400, reason = "Bad Request", content_type = "text/plain; charset=utf-8", body = "bad request\n"})
-		return
+		return true
+	}
+	if parts[0] == "GET" && strings.has_prefix(parts[1], "/watch?") {
+		if path, valid := watch_request_path(parts[1], repository); valid {
+			thread.run_with_poly_data(Watch_Request{socket = socket, repo_root = repository.repo_root, path = path}, watch_file)
+			return false
+		}
+		send_response(socket, not_found())
+		return true
 	}
 	send_response(socket, route_request(parts[0], parts[1], history, page, repository))
+	return true
 }
 
 server_running: bool
 server_listener: net.TCP_Socket = -1
+
+repository_port :: proc(repo_root: string) -> int {
+	hash: u64 = 14695981039346656037
+	for byte in transmute([]byte)repo_root {
+		hash ~= u64(byte)
+		hash *= 1099511628211
+	}
+	return 20000 + int(hash % 20000)
+}
 
 interrupt_handler :: proc "c" (_: posix.Signal) {
 	server_running = false
@@ -177,8 +274,15 @@ interrupt_handler :: proc "c" (_: posix.Signal) {
 }
 
 serve :: proc(history: ^History, open_browser := true, repository: ^Repository = nil) -> (string, bool) {
-	listener, listen_err := net.listen_tcp({net.IP4_Loopback, 0})
+	port := 0
+	if repository != nil {
+		port = repository_port(repository.repo_root)
+	}
+	listener, listen_err := net.listen_tcp({net.IP4_Loopback, port})
 	if listen_err != nil {
+		if port > 0 {
+			return fmt.aprintf("could not bind repository port %d", port), false
+		}
 		return "could not bind loopback server", false
 	}
 	server_listener = listener
@@ -213,8 +317,9 @@ serve :: proc(history: ^History, open_browser := true, repository: ^Repository =
 			if !server_running { break }
 			continue
 		}
-		handle_connection(client, history, page, repository)
-		net.close(client)
+		if handle_connection(client, history, page, repository) {
+			net.close(client)
+		}
 	}
 	return "", true
 }

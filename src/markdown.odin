@@ -282,7 +282,7 @@ render_history_snapshot :: proc(history: ^History, index: int) -> (string, bool)
 	if len(commit.html) > 0 {
 		return "", true
 	}
-	if len(commit.markdown) == 0 {
+	if len(commit.markdown) == 0 && !commit.working {
 		message, loaded := load_blob(history.repo_root, commit)
 		if !loaded {
 			return message, false

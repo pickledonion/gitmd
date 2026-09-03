@@ -26,7 +26,7 @@ main :: proc() {
 		fmt.eprintf("gitmd: %s\n", render_message)
 		os.exit(1)
 	}
-	serve_message, served := serve(&history, true, &repository)
+	serve_message, served := serve(&history, false, &repository)
 	if !served {
 		fmt.eprintf("gitmd: %s\n", serve_message)
 		os.exit(1)
