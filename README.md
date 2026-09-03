@@ -49,10 +49,11 @@ committed `.md`/`.markdown` files, the selected file's history, and a linked
 outline of its headings. Use `1`, `2`, and `3` to select those tabs. Click a
 commit to view it. Use `←`/`h` and `→`/`l` to select the sidebar or document
 pane. In the sidebar, `↑`/`k` and `↓`/`j` move through the active list; in the
-document pane they scroll the text. Modifier shortcuts are ignored except for
-`⌘B`, which toggles the sidebar, so normal selection and copy shortcuts continue
-to work. Drag the divider to resize the sidebar, or focus it and use the arrow
-keys. Stop the server with `Ctrl+C`.
+document pane they scroll the text. Press `/` to filter the active sidebar list
+as you type, and `Esc` to cancel the search. Modifier shortcuts are ignored
+except for `⌘B`, which toggles the sidebar, so normal selection and copy
+shortcuts continue to work. Drag the divider to resize the sidebar, or focus it
+and use the arrow keys. Stop the server with `Ctrl+C`.
 
 ## How it works
 
