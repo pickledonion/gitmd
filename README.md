@@ -62,8 +62,8 @@ make fish
 ./build/gitmd docs/S00.01-worker.md
 ```
 
-- If you installed the optional Fish function, use `gitmd` from any directory.
-  Arguments are passed through to the app.
+- After running `make fish`, use `gitmd` from any directory. Arguments are
+  passed through to the app.
 
 - Open the localhost URL printed by the CLI.
 - Switch among Files, History, and Outline with `1`, `2`, and `3`.
