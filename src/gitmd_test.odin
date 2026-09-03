@@ -156,6 +156,8 @@ snapshot_routes_are_fragments :: proc(t: ^testing.T) {
 	testing.expect(t, strings.contains(page, `class="sidebar-search"`))
 	testing.expect(t, strings.contains(page, `if (!['Escape','ArrowUp','ArrowDown'].includes(evt.key)) evt.stopPropagation()`))
 	testing.expect(t, strings.contains(page, `data-on:input="const query = evt.currentTarget.value.toLowerCase()`))
+	testing.expect(t, strings.contains(page, `Array.from(query).every(character => (position = text.indexOf(character, position + 1)) >= 0)`))
+	testing.expect(t, !strings.contains(page, `textContent.toLowerCase().includes(query)`))
 	testing.expect(t, strings.contains(page, `@get('/snapshot/0123456789012345678901234567890123456789')`))
 	testing.expect(t, strings.contains(page, `data-class:sidebar-hidden="!$sidebarOpen"`))
 	testing.expect(t, strings.contains(page, `role="separator" aria-label="Resize sidebar"`))

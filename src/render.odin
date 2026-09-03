@@ -186,7 +186,7 @@ initial_page :: proc(history: ^History, repository: ^Repository = nil, selected_
 	strings.write_string(&builder, render_outline(&history.commits[selected_commit]))
 	strings.write_string(&builder, `<form class="sidebar-search" role="search" data-show="$searching" data-on:submit="evt.preventDefault()">
 <label for="sidebar-search-input" aria-label="Filter sidebar">/</label>
-<input id="sidebar-search-input" type="search" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Filter sidebar" data-on:keydown="if (!['Escape','ArrowUp','ArrowDown'].includes(evt.key)) evt.stopPropagation()" data-on:input="const query = evt.currentTarget.value.toLowerCase(); document.querySelectorAll('.file-browser li,.history li,.outline li').forEach(item => item.hidden = !item.textContent.toLowerCase().includes(query))">
+<input id="sidebar-search-input" type="search" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Filter sidebar" data-on:keydown="if (!['Escape','ArrowUp','ArrowDown'].includes(evt.key)) evt.stopPropagation()" data-on:input="const query = evt.currentTarget.value.toLowerCase(); document.querySelectorAll('.file-browser li,.history li,.outline li').forEach(item => { const text = item.textContent.toLowerCase(); let position = -1; item.hidden = !Array.from(query).every(character => (position = text.indexOf(character, position + 1)) >= 0) })">
 </form>
 </aside>
 <div class="sidebar-resizer" role="separator" aria-label="Resize sidebar" aria-orientation="vertical" aria-valuemin="160" aria-valuemax="640" aria-valuenow="260" tabindex="0"
