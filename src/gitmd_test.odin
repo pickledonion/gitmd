@@ -385,7 +385,7 @@ watch_stream_keeps_committed_snapshot_fixed :: proc(t: ^testing.T) {
 
 @(test)
 repository_page_has_file_and_history_modes :: proc(t: ^testing.T) {
-	repository := Repository{files = make([dynamic]string, 0), selected_file = 1}
+	repository := Repository{repo_root = "/Users/example/project-name", files = make([dynamic]string, 0), selected_file = 1}
 	append(&repository.files, "README.md", "docs/guide.md")
 	history := History{path = "docs/guide.md", commits = make([dynamic]Commit, 0)}
 	append(&history.commits, Commit{
@@ -403,6 +403,10 @@ repository_page_has_file_and_history_modes :: proc(t: ^testing.T) {
 		html = `<h1 id="older-guide">Older guide</h1><h2 id="install"><code>Install</code> &amp; run</h2>`,
 	})
 	page := initial_page(&history, &repository, 1)
+	testing.expect(t, strings.contains(page, `<title>docs/guide.md · project-name</title>`))
+	testing.expect(t, strings.contains(page, `<header><strong>project-name</strong>`))
+	testing.expect(t, strings.contains(page, `data-repository-name="project-name"`))
+	testing.expect(t, strings.contains(page, `document.title = evt.currentTarget.dataset.path + ' · ' + browser.dataset.repositoryName`))
 	testing.expect(t, strings.contains(page, ">Files</button>"))
 	testing.expect(t, strings.contains(page, ">History</button>"))
 	testing.expect(t, strings.contains(page, ">Outline</button>"))
@@ -454,4 +458,24 @@ repository_ports_are_stable_and_path_specific :: proc(t: ^testing.T) {
 	testing.expect_value(t, first, repository_port("/Users/example/one/gitmd"))
 	testing.expect(t, first >= 20000 && first < 40000)
 	testing.expect(t, first != repository_port("/Users/example/two/gitmd"))
+}
+
+@(test)
+occupied_repository_port_falls_back_to_available_port :: proc(t: ^testing.T) {
+	occupied, listen_err := net.listen_tcp({net.IP4_Loopback, 0})
+	testing.expect_value(t, listen_err, nil)
+	if listen_err != nil { return }
+	defer net.close(occupied)
+	occupied_endpoint, endpoint_err := net.bound_endpoint(occupied)
+	testing.expect_value(t, endpoint_err, nil)
+	if endpoint_err != nil { return }
+
+	listener, fallback_err := listen_with_fallback(occupied_endpoint.port)
+	testing.expect_value(t, fallback_err, nil)
+	if fallback_err != nil { return }
+	defer net.close(listener)
+	fallback_endpoint, fallback_endpoint_err := net.bound_endpoint(listener)
+	testing.expect_value(t, fallback_endpoint_err, nil)
+	if fallback_endpoint_err != nil { return }
+	testing.expect(t, fallback_endpoint.port != occupied_endpoint.port)
 }

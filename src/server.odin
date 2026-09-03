@@ -348,6 +348,14 @@ repository_port :: proc(repo_root: string) -> int {
 	return 20000 + int(hash % 20000)
 }
 
+listen_with_fallback :: proc(port: int) -> (net.TCP_Socket, net.Network_Error) {
+	listener, listen_err := net.listen_tcp({net.IP4_Loopback, port})
+	if listen_err != nil && port > 0 {
+		return net.listen_tcp({net.IP4_Loopback, 0})
+	}
+	return listener, listen_err
+}
+
 interrupt_handler :: proc "c" (_: posix.Signal) {
 	server_running = false
 	if server_listener >= 0 {
@@ -361,11 +369,8 @@ serve :: proc(history: ^History, open_browser := true, repository: ^Repository =
 	if repository != nil {
 		port = repository_port(repository.repo_root)
 	}
-	listener, listen_err := net.listen_tcp({net.IP4_Loopback, port})
+	listener, listen_err := listen_with_fallback(port)
 	if listen_err != nil {
-		if port > 0 {
-			return fmt.aprintf("could not bind repository port %d", port), false
-		}
 		return "could not bind loopback server", false
 	}
 	server_listener = listener
