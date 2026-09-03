@@ -27,7 +27,7 @@ watch_fragment :: proc(history: ^History, selected_commit: int) -> string {
 	commit_hash := history.commits[selected_commit].full_hash
 	if history.commits[selected_commit].working { commit_hash = "working" }
 	commit := net.percent_encode(commit_hash, context.temp_allocator)
-	return fmt.aprintf(`<div id="watch" data-init="@get('/watch?path=%s&amp;commit=%s')"></div>`, path, commit)
+	return fmt.aprintf(`<div id="watch" data-init="@get('/watch?path=%s&amp;commit=%s', {{requestCancellation: 'cleanup'}})"></div>`, path, commit)
 }
 
 sse_patch_elements :: proc(elements: string) -> string {
