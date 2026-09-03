@@ -270,6 +270,8 @@ repository_page_has_file_and_history_modes :: proc(t: ^testing.T) {
 	testing.expect(t, strings.contains(page, `aria-label="Document outline"`))
 	testing.expect(t, strings.contains(page, `<li class="outline-level-1"><a href="#older-guide">Older guide</a></li>`))
 	testing.expect(t, strings.contains(page, `<li class="outline-level-2"><a href="#install">Install &amp; run</a></li>`))
+	testing.expect(t, strings.contains(STYLESHEET, `.file-browser a:hover,.history a:hover,.outline a:hover`))
+	testing.expect(t, strings.contains(STYLESHEET, `.file-browser a.selected,.history a.selected,.outline a.selected { background:var(--selected); }`))
 	testing.expect(t, strings.contains(page, "README.md"))
 	testing.expect(t, strings.contains(page, "docs/guide.md"))
 	testing.expect(t, strings.contains(page, `href="/docs/guide.md"`))
