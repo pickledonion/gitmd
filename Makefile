@@ -5,7 +5,7 @@ FISH_FUNCTIONS_DIR ?= $(HOME)/.config/fish/functions
 .PHONY: all clean compile fish run test
 
 all: compile
-	$(BIN) "$${GITMD_TARGET:-.}"
+	@$(BIN) "$${GITMD_TARGET:-.}"
 
 compile: $(BIN)
 
@@ -17,7 +17,7 @@ test:
 	$(ODIN) test src -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
 
 run:
-	$(BIN)
+	@$(BIN)
 
 fish:
 	@mkdir -p "$(FISH_FUNCTIONS_DIR)"
