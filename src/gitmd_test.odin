@@ -79,6 +79,7 @@ history_metadata_snapshots_and_rename :: proc(t: ^testing.T) {
 	if !ok { return }
 	testing.expect_value(t, len(history.commits), 4)
 	testing.expect(t, history.commits[0].working)
+	testing.expect(t, !history.commits[0].dirty)
 	testing.expect_value(t, history.commits[0].subject, "Working tree")
 	testing.expect_value(t, history.commits[1].subject, "newest subject")
 	testing.expect_value(t, history.commits[2].subject, "rename subject")
@@ -89,6 +90,15 @@ history_metadata_snapshots_and_rename :: proc(t: ^testing.T) {
 	testing.expect(t, !strings.contains(history.commits[3].markdown, "Second snapshot."))
 	testing.expect_value(t, len(history.commits[1].full_hash), 40)
 	testing.expect(t, len(history.commits[1].author_date) >= 10)
+	clean_history := render_history(&history, 0)
+	testing.expect(t, !strings.contains(clean_history, "Working tree"))
+	must_write(t, path, strings.concatenate({history.commits[0].markdown, "\nUncommitted change.\n"}))
+	dirty_history, dirty_message, dirty_ok := load_history(path)
+	testing.expectf(t, dirty_ok, "load_history failed: %s", dirty_message)
+	if dirty_ok {
+		testing.expect(t, dirty_history.commits[0].dirty)
+		testing.expect(t, strings.contains(render_history(&dirty_history, 0), "Working tree"))
+	}
 }
 
 @(test)
@@ -162,12 +172,16 @@ snapshot_routes_are_fragments :: proc(t: ^testing.T) {
 	testing.expect(t, strings.contains(page, `['1','2','3'].includes(evt.key)`))
 	testing.expect(t, strings.contains(page, `$sidebar = ['files','history','outline'][Number(evt.key) - 1]`))
 	testing.expect(t, strings.contains(page, `['ArrowLeft','h','ArrowRight','l'].includes(evt.key)`))
+	testing.expect(t, strings.contains(page, `document.querySelector('.sidebar').focus({preventScroll:true})`))
+	testing.expect(t, strings.contains(page, `document.querySelector('.preview-pane').focus({preventScroll:true})`))
 	testing.expect(t, strings.contains(page, `document.querySelector('.preview-pane').scrollBy(0, previous ? -80 : 80)`))
 	testing.expect(t, strings.contains(page, `Array.from(section.querySelectorAll('a')).filter(link => !link.closest('li').hidden)`))
 	testing.expect(t, strings.contains(page, `links[next].scrollIntoView({block:'nearest'})`))
 	testing.expect(t, strings.contains(page, `let current = links.indexOf(section.querySelector('a.selected'))`))
 	testing.expect(t, strings.contains(page, `$fileTimer = setTimeout(() => target.click(), 0)`))
-	testing.expect(t, strings.contains(page, `$historyTimer = setTimeout(() => target.click(), 0)`))
+	testing.expect(t, strings.contains(page, `target.focus({preventScroll:true})`))
+	testing.expect(t, strings.contains(page, `list.scrollTop += itemRect.bottom - listRect.bottom`))
+	testing.expect(t, strings.contains(page, `$historyTimer = setTimeout(() => target.click(), 120)`))
 	testing.expect(t, strings.contains(page, `evt.key === '/'`))
 	testing.expect(t, strings.contains(page, `evt.key === 'Escape'`))
 	testing.expect(t, strings.contains(page, `class="sidebar-search"`))
@@ -220,6 +234,7 @@ untracked_markdown_and_invalid_inputs :: proc(t: ^testing.T) {
 	if loaded {
 		testing.expect_value(t, len(history.commits), 1)
 		testing.expect(t, history.commits[0].working)
+		testing.expect(t, history.commits[0].dirty)
 		testing.expect_value(t, history.commits[0].markdown, "nothing committed\n")
 	}
 	outside, err := os.make_directory_temp("", "gitmd-nonrepo-*", context.allocator)
@@ -295,6 +310,58 @@ working_snapshot_starts_watch_stream_and_formats_updates :: proc(t: ^testing.T) 
 	testing.expect_value(t, path, "docs/a guide.md")
 	_, traversal := watch_request_path("/watch?path=..%2Fsecret.md", &repository)
 	testing.expect(t, !traversal)
+}
+
+@(test)
+watch_updates_coalesce_and_limit_fragment_scope :: proc(t: ^testing.T) {
+	working_request := Watch_Request{path = "docs/guide.md", commit_hash = "working"}
+	working, working_rendered, working_kind := render_watch_update(
+		&working_request,
+		Watch_Changes{contents = true},
+		"# Working\n",
+		true,
+	)
+	testing.expect(t, working_rendered)
+	testing.expect_value(t, working_kind, "working")
+	testing.expect(t, strings.contains(working, `id="preview"`))
+	testing.expect(t, strings.contains(working, `id="outline"`))
+	testing.expect(t, !strings.contains(working, `id="files"`))
+	testing.expect(t, !strings.contains(working, `id="history"`))
+
+	fixed_request := Watch_Request{path = "docs/guide.md", commit_hash = "0123456789abcdef0123456789abcdef01234567"}
+	fixed, fixed_rendered, fixed_kind := render_watch_update(
+		&fixed_request,
+		Watch_Changes{contents = true},
+		"# Working\n",
+		true,
+	)
+	testing.expect(t, fixed_rendered)
+	testing.expect_value(t, fixed_kind, "fixed-snapshot")
+	testing.expect_value(t, len(fixed), 0)
+
+	pending: Watch_Pending
+	now := time.tick_now()
+	mark_watch_change(&pending, now, Watch_Changes{contents = true})
+	mark_watch_change(&pending, now, Watch_Changes{files = true})
+	testing.expect(t, pending.dirty)
+	testing.expect_value(t, pending.observations, 2)
+	testing.expect(t, pending.changes.contents)
+	testing.expect(t, pending.changes.files)
+
+	root, _ := make_fixture(t)
+	defer os.remove_all(root)
+	files_request := Watch_Request{repo_root = root, path = "docs with spaces/new name.md", commit_hash = "working"}
+	files, files_rendered, files_kind := render_watch_update(
+		&files_request,
+		Watch_Changes{files = true},
+		"",
+		true,
+	)
+	testing.expect(t, files_rendered)
+	testing.expect_value(t, files_kind, "files")
+	testing.expect(t, strings.contains(files, `id="files"`))
+	testing.expect(t, !strings.contains(files, `id="history"`))
+	testing.expect(t, !strings.contains(files, `id="preview"`))
 }
 
 @(test)

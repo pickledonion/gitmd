@@ -185,12 +185,34 @@ render_working_fragments :: proc(markdown: string) -> (string, bool) {
 	}), true
 }
 
-repository_watch_state :: proc(repo_root: string) -> (string, bool) {
-	result := run_command(repo_root, []string{
-		"/usr/bin/git", "status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all",
+WATCH_POLL_INTERVAL :: 250 * time.Millisecond
+WATCH_REPOSITORY_INTERVAL :: 1 * time.Second
+WATCH_QUIET_PERIOD :: 200 * time.Millisecond
+WATCH_MAX_UPDATE_DELAY :: 1 * time.Second
+WATCH_KEEPALIVE_INTERVAL :: 15 * time.Second
+
+Repository_Watch_State :: struct {
+	files: string,
+	head:  string,
+}
+
+repository_watch_state :: proc(repo_root: string) -> (Repository_Watch_State, bool) {
+	files_result := run_command(repo_root, []string{
+		"/usr/bin/git", "ls-files", "--cached", "--others", "--exclude-standard", "-z",
 	})
-	if !result.ok { return "", false }
-	return result.stdout, true
+	if !files_result.ok {
+		gitmd_logf("watch repository files failed repo=%s", repo_root)
+		return {}, false
+	}
+
+	head_result := run_command(repo_root, []string{"/usr/bin/git", "rev-parse", "--verify", "HEAD"})
+	head := ""
+	if head_result.ok {
+		head = strings.clone(trim_command_output(head_result.stdout))
+	} else {
+		gitmd_logf("watch repository has no readable HEAD repo=%s", repo_root)
+	}
+	return Repository_Watch_State{files = files_result.stdout, head = head}, true
 }
 
 render_watch_fragments :: proc(request: ^Watch_Request) -> (string, bool) {
@@ -237,76 +259,211 @@ render_watch_fragments :: proc(request: ^Watch_Request) -> (string, bool) {
 	}), true
 }
 
+Watch_Changes :: struct {
+	contents: bool,
+	files:    bool,
+	head:     bool,
+}
+
+Watch_Pending :: struct {
+	changes:       Watch_Changes,
+	first_change:  time.Tick,
+	last_change:   time.Tick,
+	observations:  int,
+	dirty:         bool,
+}
+
+mark_watch_change :: proc(pending: ^Watch_Pending, now: time.Tick, changes: Watch_Changes) {
+	if !pending.dirty {
+		pending.first_change = now
+	}
+	pending.last_change = now
+	pending.observations += 1
+	pending.dirty = true
+	pending.changes.contents = pending.changes.contents || changes.contents
+	pending.changes.files = pending.changes.files || changes.files
+	pending.changes.head = pending.changes.head || changes.head
+}
+
+render_watch_update :: proc(request: ^Watch_Request, changes: Watch_Changes, markdown: string, exists: bool) -> (fragments: string, rendered: bool, kind: string) {
+	if changes.head {
+		fragments, rendered = render_watch_fragments(request)
+		return fragments, rendered, "repository"
+	}
+
+	if changes.files {
+		repository, _, loaded := load_repository(request.repo_root)
+		if !loaded {
+			return "", false, "files-error"
+		}
+		selected := -1
+		for file, index in repository.files {
+			if file == request.path {
+				selected = index
+				break
+			}
+		}
+		if selected < 0 {
+			fragments, rendered = render_watch_fragments(request)
+			return fragments, rendered, "repository"
+		}
+		repository.selected_file = selected
+		files := render_files(&repository)
+		if request.commit_hash == "working" && changes.contents {
+			if exists {
+				working, working_rendered := render_working_fragments(markdown)
+				if !working_rendered { return "", false, "files+working-error" }
+				return strings.concatenate({files, working}), true, "files+working"
+			}
+			return strings.concatenate({files, missing_working_fragments()}), true, "files+missing"
+		}
+		return files, true, "files"
+	}
+
+	if changes.contents && request.commit_hash == "working" {
+		if exists {
+			working, working_rendered := render_working_fragments(markdown)
+			return working, working_rendered, "working"
+		}
+		return missing_working_fragments(), true, "missing"
+	}
+
+	return "", true, "fixed-snapshot"
+}
+
 watch_file :: proc(request: Watch_Request) {
 	defer net.close(request.socket)
+	gitmd_logf("watch start repo=%s path=%s commit=%s", request.repo_root, request.path, request.commit_hash)
+	defer gitmd_logf("watch stop repo=%s path=%s commit=%s", request.repo_root, request.path, request.commit_hash)
 	header := "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nConnection: keep-alive\r\nX-Accel-Buffering: no\r\nX-Content-Type-Options: nosniff\r\n\r\n"
-	if !send_all(request.socket, header) { return }
+	if !send_all(request.socket, header) {
+		gitmd_logf("watch header send failed path=%s", request.path)
+		return
+	}
 	active_request := request
 	if len(active_request.commit_hash) == 0 { active_request.commit_hash = "working" }
 	absolute_path, path_err := filepath.join([]string{active_request.repo_root, active_request.path})
-	if path_err != nil { return }
+	if path_err != nil {
+		gitmd_logf("watch path join failed repo=%s path=%s", active_request.repo_root, active_request.path)
+		return
+	}
 	previous_contents := ""
 	previous_exists := false
-	previous_repository_state := ""
+	previous_files := ""
+	previous_head := ""
+	repository_state_initialized := false
 	defer {
 		if len(previous_contents) > 0 { delete(previous_contents) }
-		if len(previous_repository_state) > 0 { delete(previous_repository_state) }
+		if len(previous_files) > 0 { delete(previous_files) }
+		if len(previous_head) > 0 { delete(previous_head) }
 	}
-	checks := 0
+	last_repository_check: time.Tick
+	repository_checked := false
+	last_keepalive := time.tick_now()
+	pending: Watch_Pending
 	for server_running {
-		repository_state := ""
-		state_loaded := false
-		state_checked := checks % 4 == 0
+		now := time.tick_now()
+		state_checked := !repository_checked || time.tick_diff(last_repository_check, now) >= WATCH_REPOSITORY_INTERVAL
 		if state_checked {
-			repository_state, state_loaded = repository_watch_state(active_request.repo_root)
+			state, state_loaded := repository_watch_state(active_request.repo_root)
+			if state_loaded {
+				files_changed := !repository_state_initialized || state.files != previous_files
+				head_changed := !repository_state_initialized || state.head != previous_head
+				if files_changed || head_changed {
+					mark_watch_change(&pending, now, Watch_Changes{files = files_changed, head = head_changed})
+					gitmd_logf(
+						"watch change observed path=%s contents=false files=%t head=%t",
+						active_request.path, files_changed, head_changed,
+					)
+				}
+				if len(previous_files) > 0 { delete(previous_files) }
+				previous_files = strings.clone(state.files)
+				if len(previous_head) > 0 { delete(previous_head) }
+				previous_head = strings.clone(state.head)
+				repository_state_initialized = true
+			}
+			last_repository_check = now
+			repository_checked = true
 		}
 		contents, read_err := os.read_entire_file(absolute_path, context.allocator)
 		exists := read_err == nil
 		markdown := ""
 		if exists { markdown = string(contents) }
-		repository_changed := state_checked && (!state_loaded || repository_state != previous_repository_state)
 		contents_changed := exists != previous_exists || exists && markdown != previous_contents
-		if repository_changed || contents_changed {
-			fragments := ""
-			rendered := false
-			if repository_changed {
-				fragments, rendered = render_watch_fragments(&active_request)
-			} else if active_request.commit_hash == "working" {
-				if exists {
-					fragments, rendered = render_working_fragments(markdown)
-				} else {
-					fragments = missing_working_fragments()
-					rendered = true
-				}
-			}
-			if rendered && !send_all(request.socket, sse_patch_elements(fragments)) {
-				if exists { delete(contents) }
-				return
-			}
-			if state_loaded {
-				if len(previous_repository_state) > 0 { delete(previous_repository_state) }
-				previous_repository_state = strings.clone(repository_state)
-			}
+		if contents_changed {
+			mark_watch_change(&pending, now, Watch_Changes{contents = true})
+			gitmd_logf("watch change observed path=%s contents=true files=false head=false", active_request.path)
 			if len(previous_contents) > 0 { delete(previous_contents) }
 			previous_contents = strings.clone(markdown)
 			previous_exists = exists
 		}
-		if exists { delete(contents) }
-		checks += 1
-		if checks >= 60 {
-			if !send_all(request.socket, ": keepalive\n\n") { return }
-			checks = 0
+
+		if pending.dirty {
+			quiet_for := time.tick_diff(pending.last_change, now)
+			pending_for := time.tick_diff(pending.first_change, now)
+			if quiet_for >= WATCH_QUIET_PERIOD || pending_for >= WATCH_MAX_UPDATE_DELAY {
+				changes := pending.changes
+				observations := pending.observations
+				pending = {}
+				gitmd_logf(
+					"watch update flush path=%s contents=%t files=%t head=%t observations=%d quiet_ms=%d age_ms=%d",
+					active_request.path,
+					changes.contents, changes.files, changes.head, observations,
+					i64(time.duration_milliseconds(quiet_for)),
+					i64(time.duration_milliseconds(pending_for)),
+				)
+				render_started := time.tick_now()
+				fragments, rendered, kind := render_watch_update(&active_request, changes, markdown, exists)
+				render_elapsed := time.duration_milliseconds(time.tick_diff(render_started, time.tick_now()))
+				if rendered && len(fragments) > 0 {
+					payload := sse_patch_elements(fragments)
+					gitmd_logf(
+						"watch update rendered path=%s kind=%s render_ms=%d bytes=%d",
+						active_request.path, kind, i64(render_elapsed), len(payload),
+					)
+					send_started := time.tick_now()
+					sent := send_all(request.socket, payload)
+					gitmd_logf(
+						"watch update sent path=%s kind=%s send_ms=%d ok=%t",
+						active_request.path, kind,
+						i64(time.duration_milliseconds(time.tick_diff(send_started, time.tick_now()))), sent,
+					)
+					if !sent {
+						if exists { delete(contents) }
+						return
+					}
+				} else {
+					gitmd_logf("watch update skipped path=%s kind=%s render_ms=%d", active_request.path, kind, i64(render_elapsed))
+				}
+			}
 		}
-		time.sleep(250 * time.Millisecond)
+		if exists { delete(contents) }
+		if time.tick_diff(last_keepalive, now) >= WATCH_KEEPALIVE_INTERVAL {
+			if !send_all(request.socket, ": keepalive\n\n") {
+				gitmd_logf("watch keepalive send failed path=%s", active_request.path)
+				return
+			}
+			gitmd_logf("watch keepalive path=%s", active_request.path)
+			last_keepalive = now
+		}
+		time.sleep(WATCH_POLL_INTERVAL)
 	}
 }
 
 handle_connection :: proc(socket: net.TCP_Socket, history: ^History, page: string, repository: ^Repository = nil) -> bool {
+	connection_started := time.tick_now()
+	gitmd_logf("http connection start")
 	buffer: [16384]byte
 	total := 0
 	for total < len(buffer) {
 		n, err := net.recv_tcp(socket, buffer[total:])
-		if err != nil || n <= 0 { return true }
+		if err != nil || n <= 0 {
+			gitmd_logf(
+				"http connection ended before headers elapsed_ms=%d",
+				i64(time.duration_milliseconds(time.tick_diff(connection_started, time.tick_now()))),
+			)
+			return true
+		}
 		total += n
 		request := string(buffer[:total])
 		if strings.contains(request, "\r\n\r\n") { break }
@@ -314,25 +471,44 @@ handle_connection :: proc(socket: net.TCP_Socket, history: ^History, page: strin
 	request := string(buffer[:total])
 	line_end := strings.index(request, "\r\n")
 	if line_end < 0 {
+		gitmd_logf("http bad request missing request line")
 		send_response(socket, {status = 400, reason = "Bad Request", content_type = "text/plain; charset=utf-8", body = "bad request\n"})
 		return true
 	}
 	parts := strings.split(request[:line_end], " ")
 	if len(parts) != 3 || !strings.has_prefix(parts[2], "HTTP/1.") {
+		gitmd_logf("http bad request malformed request line")
 		send_response(socket, {status = 400, reason = "Bad Request", content_type = "text/plain; charset=utf-8", body = "bad request\n"})
 		return true
 	}
+	gitmd_logf("http request method=%s target=%s", parts[0], parts[1])
 	if parts[0] == "GET" && strings.has_prefix(parts[1], "/watch?") {
 		if path, valid := watch_request_path(parts[1], repository); valid {
 			commit_hash, decoded := net.percent_decode(query_parameter(parts[1], "commit"), context.temp_allocator)
 			if !decoded { commit_hash = "working" }
+			gitmd_logf("http watch dispatch path=%s commit=%s", path, commit_hash)
 			thread.run_with_poly_data(Watch_Request{socket = socket, repo_root = repository.repo_root, path = path, commit_hash = strings.clone(commit_hash)}, watch_file)
 			return false
 		}
+		gitmd_logf("http watch not found target=%s", parts[1])
 		send_response(socket, not_found())
 		return true
 	}
-	send_response(socket, route_request(parts[0], parts[1], history, page, repository))
+	route_started := time.tick_now()
+	response := route_request(parts[0], parts[1], history, page, repository)
+	gitmd_logf(
+		"http response ready target=%s status=%d bytes=%d route_ms=%d",
+		parts[1], response.status, len(response.body),
+		i64(time.duration_milliseconds(time.tick_diff(route_started, time.tick_now()))),
+	)
+	send_started := time.tick_now()
+	send_response(socket, response)
+	gitmd_logf(
+		"http response sent target=%s send_ms=%d total_ms=%d",
+		parts[1],
+		i64(time.duration_milliseconds(time.tick_diff(send_started, time.tick_now()))),
+		i64(time.duration_milliseconds(time.tick_diff(connection_started, time.tick_now()))),
+	)
 	return true
 }
 
@@ -371,6 +547,7 @@ serve :: proc(history: ^History, open_browser := true, repository: ^Repository =
 	}
 	listener, listen_err := listen_with_fallback(port)
 	if listen_err != nil {
+		gitmd_logf("server listen failed repo=%s", history.repo_root)
 		return "could not bind loopback server", false
 	}
 	server_listener = listener
@@ -382,6 +559,7 @@ serve :: proc(history: ^History, open_browser := true, repository: ^Repository =
 	}
 	endpoint, endpoint_err := net.bound_endpoint(listener)
 	if endpoint_err != nil {
+		gitmd_logf("server endpoint lookup failed")
 		return "could not determine server port", false
 	}
 	server_url := fmt.aprintf("http://127.0.0.1:%d", endpoint.port)
@@ -389,6 +567,7 @@ serve :: proc(history: ^History, open_browser := true, repository: ^Repository =
 	if repository != nil {
 		initial_url = strings.concatenate({server_url, repository_url(repository.files[repository.selected_file])})
 	}
+	gitmd_logf("server start url=%s repo=%s", initial_url, history.repo_root)
 	fmt.println(initial_url)
 	if open_browser {
 		opened := run_command("", []string{"/usr/bin/open", initial_url})
@@ -409,5 +588,6 @@ serve :: proc(history: ^History, open_browser := true, repository: ^Repository =
 			net.close(client)
 		}
 	}
+	gitmd_logf("server stop")
 	return "", true
 }

@@ -3,6 +3,7 @@ package main
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
+import "core:time"
 
 Commit :: struct {
 	full_hash:  string,
@@ -14,6 +15,7 @@ Commit :: struct {
 	markdown:    string,
 	html:        string,
 	working:     bool,
+	dirty:       bool,
 }
 
 History :: struct {
@@ -34,13 +36,52 @@ Command_Result :: struct {
 	ok:     bool,
 }
 
+command_summary :: proc(command: []string) -> string {
+	builder := strings.builder_make()
+	defer strings.builder_destroy(&builder)
+	for argument, index in command {
+		if index > 0 {
+			strings.write_byte(&builder, ' ')
+		}
+		strings.write_string(&builder, argument)
+	}
+	return strings.clone(strings.to_string(builder))
+}
+
 run_command :: proc(working_dir: string, command: []string) -> Command_Result {
+	command_text := ""
+	started: time.Tick
+	if gitmd_log_enabled {
+		command_text = command_summary(command)
+		started = time.tick_now()
+		gitmd_logf("command start cwd=%s command=%s", working_dir, command_text)
+	}
+	defer if len(command_text) > 0 { delete(command_text) }
+
 	state, stdout, stderr, err := os.process_exec(
 		{working_dir = working_dir, command = command},
 		context.allocator,
 	)
 	if err != nil {
+		if gitmd_log_enabled {
+			gitmd_logf(
+				"command end ok=false elapsed_ms=%d command=%s start_error=true",
+				i64(time.duration_milliseconds(time.tick_diff(started, time.tick_now()))),
+				command_text,
+			)
+		}
 		return {stderr = strings.clone(err_string(err)), ok = false}
+	}
+	if gitmd_log_enabled {
+		gitmd_logf(
+			"command end ok=%t exit=%d elapsed_ms=%d stdout_bytes=%d stderr_bytes=%d command=%s",
+			state.exited && state.exit_code == 0,
+			state.exit_code,
+			i64(time.duration_milliseconds(time.tick_diff(started, time.tick_now()))),
+			len(stdout),
+			len(stderr),
+			command_text,
+		)
 	}
 	return {
 		stdout = string(stdout),
@@ -264,7 +305,15 @@ load_working_snapshot :: proc(repo_root, relative_path: string) -> (Commit, bool
 		path = strings.clone(relative_path),
 		markdown = string(contents),
 		working = true,
+		dirty = true,
 	}, true
+}
+
+working_path_is_dirty :: proc(repo_root, relative_path: string) -> bool {
+	result := run_command(repo_root, []string{
+		"/usr/bin/git", "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", relative_path,
+	})
+	return !result.ok || len(result.stdout) > 0
 }
 
 load_history_snapshots :: proc(repo_root, relative_path: string) -> (History, string, bool) {
@@ -275,6 +324,7 @@ load_history_snapshots :: proc(repo_root, relative_path: string) -> (History, st
 	}
 	all := make([dynamic]Commit, 0, len(commits) + 1)
 	if has_working {
+		working.dirty = !committed || working_path_is_dirty(repo_root, relative_path)
 		append(&all, working)
 	}
 	append(&all, ..commits[:])

@@ -42,6 +42,18 @@ make
 make test
 ```
 
+- Capture server timing and live-update diagnostics when investigating a slow
+  refresh:
+
+```fish
+GITMD_LOG=/tmp/gitmd.log make
+tail -f /tmp/gitmd.log
+```
+
+  Use `GITMD_LOG=stderr` to print the same log in the server terminal. The log
+  records Git command durations, request timing, coalesced watch changes, and
+  update render/send timing.
+
 ## Optional Fish function
 
 - Install an autoloaded Fish function to make `gitmd` available globally:
@@ -74,7 +86,8 @@ make fish
 - Open the localhost URL printed by the CLI.
 - Switch among Files, History, and Outline with `1`, `2`, and `3`.
   - Files lists tracked and untracked `.md` and `.markdown` files.
-  - History lists the selected file's working tree and committed revisions.
+  - History lists committed revisions, plus the working tree when the selected
+    file has uncommitted changes.
   - Outline links to the selected file's headings.
 - See working-tree changes, commits, and Markdown file-list changes update
   automatically, or click a commit to view its fixed snapshot.
