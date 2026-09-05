@@ -288,8 +288,72 @@ repository_lists_only_markdown_and_selects_requested_file :: proc(t: ^testing.T)
 		fresh := route_request("GET", "/fresh.md?partial=1", &history, "page", &repository)
 		testing.expect_value(t, fresh.status, 200)
 		testing.expect(t, strings.contains(fresh.body, `<h1 id="fresh">Fresh</h1>`))
+		testing.expect_value(t, repository.selected_file, 1)
+		testing.expect_value(t, repository.files[0], "docs with spaces/new name.md")
+		testing.expect_value(t, repository.files[1], "fresh.md")
+		testing.expect_value(t, repository.files[2], "notes.markdown")
 	}
 	_ = path
+}
+
+@(test)
+repository_keeps_untracked_markdown_in_path_order :: proc(t: ^testing.T) {
+	root, _ := make_fixture(t)
+	defer os.remove_all(root)
+	expected := []string{
+		"Z.md",
+		"a.markdown",
+		"docs with spaces/S00.02-first.md",
+		"docs with spaces/S00.03-repository-tools.md",
+		"docs with spaces/S00.04-last.md",
+		"docs with spaces/new name.md",
+	}
+	untracked := expected[3]
+	for file in expected[:5] {
+		if file == untracked { continue }
+		must_write(t, test_path(root, file), "# Tracked\n")
+		must_git(t, root, []string{"add", "--", file})
+	}
+	must_write(t, test_path(root, ".gitignore"), "ignored.md\n")
+	must_git(t, root, []string{"add", "--", ".gitignore"})
+	must_git(t, root, []string{"commit", "-q", "-m", "add surrounding Markdown paths"})
+	must_write(t, test_path(root, "ignored.md"), "# Ignored\n")
+	contents := "# Repository tools\n\nWorking-tree contents.\n"
+	must_write(t, test_path(root, untracked), contents)
+
+	for state in 0 ..< 3 {
+		if state == 1 {
+			must_git(t, root, []string{"add", "--", untracked})
+		} else if state == 2 {
+			must_git(t, root, []string{"commit", "-q", "-m", "add repository tools"})
+		}
+		repository, message, loaded := load_repository(test_path(root, untracked))
+		testing.expectf(t, loaded, "load_repository failed: %s", message)
+		if !loaded { return }
+		if !testing.expect_value(t, len(repository.files), len(expected)) { return }
+		for file, index in expected {
+			testing.expect_value(t, repository.files[index], file)
+		}
+		testing.expect_value(t, repository.selected_file, 3)
+
+		startup, startup_message, startup_loaded := load_repository(root)
+		testing.expectf(t, startup_loaded, "directory load failed: %s", startup_message)
+		if !startup_loaded { return }
+		testing.expect_value(t, startup.files[startup.selected_file], expected[0])
+
+		history: History
+		response := route_request("GET", "/docs%20with%20spaces/S00.03-repository-tools.md?partial=1", &history, "page", &startup)
+		testing.expect_value(t, response.status, 200)
+		testing.expect_value(t, startup.selected_file, 3)
+		testing.expect(t, strings.contains(response.body, `<h1 id="repository-tools">Repository tools</h1>`))
+		testing.expect(t, strings.contains(response.body, "<p>Working-tree contents.</p>"))
+		if state < 2 {
+			if !testing.expect_value(t, len(history.commits), 1) { return }
+			testing.expect(t, history.commits[0].working)
+			testing.expect(t, history.commits[0].dirty)
+			testing.expect_value(t, history.commits[0].markdown, contents)
+		}
+	}
 }
 
 @(test)
@@ -368,6 +432,7 @@ watch_updates_coalesce_and_limit_fragment_scope :: proc(t: ^testing.T) {
 watch_stream_pushes_changed_file :: proc(t: ^testing.T) {
 	root, path := make_fixture(t)
 	defer os.remove_all(root)
+	must_write(t, test_path(root, "README.md"), "# Readme\n")
 	listener, listen_err := net.listen_tcp({net.IP4_Loopback, 0})
 	testing.expect_value(t, listen_err, nil)
 	if listen_err != nil { return }
@@ -405,6 +470,11 @@ watch_stream_pushes_changed_file :: proc(t: ^testing.T) {
 	must_write(t, test_path(root, "live.md"), "# Live file\n")
 	files_update, received_file := receive_until(client, "live.md")
 	testing.expectf(t, received_file, "file-list watch event missing: %s", files_update)
+	readme_position := strings.index(files_update, `data-path="README.md"`)
+	selected_position := strings.index(files_update, `data-path="docs with spaces/new name.md"`)
+	live_position := strings.index(files_update, `data-path="live.md"`)
+	testing.expect(t, readme_position >= 0 && readme_position < selected_position && selected_position < live_position)
+	testing.expect(t, strings.contains(files_update, `id="file-1" class="selected" aria-current="page"`))
 }
 
 @(test)

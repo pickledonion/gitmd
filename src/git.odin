@@ -2,6 +2,7 @@ package main
 
 import "core:os"
 import "core:path/filepath"
+import "core:slice"
 import "core:strings"
 import "core:time"
 
@@ -174,6 +175,7 @@ load_repository :: proc(input_path: string) -> (Repository, string, bool) {
 	if len(files) == 0 {
 		return {}, "repository has no Markdown files", false
 	}
+	slice.sort(files[:])
 	selected := 0
 	if !is_directory {
 		relative, rel_err := filepath.rel(repo_root, absolute)

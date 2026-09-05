@@ -85,7 +85,9 @@ make fish
 
 - Open the localhost URL printed by the CLI.
 - Switch among Files, History, and Outline with `1`, `2`, and `3`.
-  - Files lists tracked and untracked `.md` and `.markdown` files.
+  - Files lists tracked and untracked `.md` and `.markdown` files together,
+    sorted case-sensitively by full repository-relative path. Staging or
+    committing a file does not change its position.
   - History lists committed revisions, plus the working tree when the selected
     file has uncommitted changes.
   - Outline links to the selected file's headings.
