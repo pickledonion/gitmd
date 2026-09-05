@@ -335,7 +335,7 @@ render_history_snapshot :: proc(history: ^History, index: int) -> (string, bool)
 	commit := &history.commits[index]
 	if history.comparison_unavailable {
 		commit.comparison_html = commit.html
-		commit.comparison_label = "Comparison unavailable · deletions hidden"
+		commit.comparison_label = "Comparison unavailable"
 		return "", true
 	}
 	// A clean working copy represents the latest revision in the default view.
@@ -348,21 +348,21 @@ render_history_snapshot :: proc(history: ^History, index: int) -> (string, bool)
 			commit.comparison_label = latest.comparison_label
 		} else {
 			commit.comparison_html = commit.html
-			commit.comparison_label = "Comparison unavailable · deletions hidden"
+			commit.comparison_label = "Comparison unavailable"
 		}
 		return "", true
 	}
 	baseline: ^Commit
-	label := "No previous version · deletions hidden"
+	label := "No previous version"
 	if index + 1 < len(history.commits) {
 		_, loaded := ensure_snapshot_rendered(history, index + 1)
 		if !loaded {
 			commit.comparison_html = commit.html
-			commit.comparison_label = "Comparison unavailable · deletions hidden"
+			commit.comparison_label = "Comparison unavailable"
 			return "", true
 		}
 		baseline = &history.commits[index + 1]
-		label = fmt.aprintf("Compared with %s · deletions hidden", baseline.short_hash)
+		label = fmt.aprintf("Compared with %s", baseline.short_hash)
 	}
 	compare_snapshot(commit, baseline, label)
 	return "", true

@@ -776,6 +776,10 @@ comparison_toggle_is_outside_panels_and_persists_in_tab :: proc(t: ^testing.T) {
 	testing.expect(t, strings.contains(file_fragments(&history, 0), `id="comparison-label"`))
 	testing.expect(t, strings.contains(STYLESHEET, "--change-added:#dafbe1"))
 	testing.expect(t, strings.contains(STYLESHEET, "--change-added:#173b27"))
+	testing.expect(t, strings.contains(STYLESHEET, "--change-deleted:#ffebe9"))
+	testing.expect(t, strings.contains(STYLESHEET, "--change-deleted:#4a2024"))
+	testing.expect(t, strings.contains(STYLESHEET, "body:not(.show-changes) .markdown-body .change-deleted { display:none; }"))
+	testing.expect(t, !strings.contains(page, "deletions hidden"))
 }
 
 @(test)
@@ -827,4 +831,97 @@ clean_default_comparison_matches_explicit_latest_commit :: proc(t: ^testing.T) {
 	testing.expect_value(t, explicit_response.status, 200)
 	testing.expect_value(t, preview_fragment(&history.commits[1]), default_preview)
 	testing.expect_value(t, history.commits[1].comparison_label, default_label)
+}
+
+@(test)
+inline_deletions_preserve_block_order :: proc(t: ^testing.T) {
+	cases := []struct { current, baseline, expected: string } {
+		{"Keep.\n", "First.\n\nKeep.\n", "<p class=\"change-deleted\">First.</p>\n<p>Keep.</p>\n"},
+		{"A.\n\nB.\n", "A.\n\nMiddle.\n\nB.\n", "<p>A.</p>\n<p class=\"change-deleted\">Middle.</p>\n<p>B.</p>\n"},
+		{"Keep.\n", "Keep.\n\nLast.\n", "<p>Keep.</p>\n<p class=\"change-deleted\">Last.</p>\n"},
+		{"New.\n\nKeep.\n", "Old.\n\nKeep.\n", "<p class=\"change-deleted\">Old.</p>\n<p class=\"change-added\">New.</p>\n<p>Keep.</p>\n"},
+		{"Same.\n\nEnd.\n", "Same.\n\nSame.\n\nEnd.\n", "<p>Same.</p>\n<p class=\"change-deleted\">Same.</p>\n<p>End.</p>\n"},
+		{"", "---\n", "<hr class=\"change-deleted\" />\n"},
+		{"", "# Gone\n\nAll gone.\n", "<h1 class=\"change-deleted\">Gone</h1>\n<p class=\"change-deleted\">All gone.</p>\n"},
+	}
+	for item in cases {
+		commit := comparison_for_test(t, item.current, item.baseline)
+		testing.expect_value(t, commit.comparison_html, item.expected)
+	}
+}
+
+@(test)
+inline_deletions_lists_and_numbering :: proc(t: ^testing.T) {
+	cases := []struct { current, baseline: string, fragments: []string } {
+		{"- keep\n", "- first\n- keep\n- last\n", {"<ul>", `<li class="change-deleted">first</li>`, "<li>keep</li>", `<li class="change-deleted">last</li>`, "</ul>"}},
+		{"- a\n- c\n", "- a\n- b\n- c\n", {"<li>a</li>", `<li class="change-deleted">b</li>`, "<li>c</li>"}},
+		{"- new\n", "- old\n", {"<ul>", `<li class="change-deleted">old</li>`, `<li class="change-added">new</li>`, "</ul>"}},
+		{"After.\n", "- gone\n  - nested\n\nAfter.\n", {`<ul class="change-deleted">`, `<li class="change-deleted">gone`, "<ul>", "<li>nested</li>", "</ul>", "</li>", "</ul>", "<p>After.</p>"}},
+		{"", "4. gone\n5. also gone\n", {`<ol start="4" class="change-deleted">`, `<li value="4" class="change-deleted">gone</li>`, `<li value="5" class="change-deleted">also gone</li>`, "</ol>"}},
+		{"4. a\n5. c\n", "4. a\n5. b\n6. c\n", {`<ol start="4">`, `<li value="4">a</li>`, `<li value="5" class="change-deleted">b</li>`, `<li value="5">c</li>`, "</ol>"}},
+		{"- [x] task\n  - new\n", "- [ ] task\n  - old\n", {`<li class="change-deleted">`, `<input type="checkbox" disabled="" />`, "<li>old</li>", `<li class="change-added">`, `<input type="checkbox" checked="" disabled="" />`, "<li>new</li>"}},
+		{"- new\n\n  paragraph\n", "- old\n\n  paragraph\n", {`<li class="change-deleted">`, "<p>old</p>", "<p>paragraph</p>", `<li class="change-added">`, "<p>new</p>"}},
+		// Merging lists must keep intervening deletions between surviving items.
+		{"- a\n- b\n", "- a\n\nBetween.\n\n- b\n", {"<li>a</li>", `<li class="change-deleted change-container">`, `<p class="change-deleted">Between.</p>`, "</li>", "<li>b</li>"}},
+		// Splitting a list must leave the old item before the added paragraph.
+		{"- a\n\nNew.\n\n- b\n", "- a\n- old\n- b\n", {"<li>a</li>", `<li class="change-deleted">old</li>`, "</ul>", `<p class="change-added">New.</p>`, "<ul>", "<li>b</li>"}},
+	}
+	for item in cases {
+		commit := comparison_for_test(t, item.current, item.baseline)
+		position := 0
+		for fragment in item.fragments {
+			index := strings.index(commit.comparison_html[position:], fragment)
+			if !testing.expectf(t, index >= 0, "missing ordered fragment %s in %s", fragment, commit.comparison_html) { break }
+			position += index + len(fragment)
+		}
+		testing.expect(t, !strings.contains(commit.comparison_html, "data-sourcepos"))
+	}
+}
+
+@(test)
+inline_deletions_complex_blocks_ids_and_safety :: proc(t: ^testing.T) {
+	baseline := "# Same\n\n<a id=\"explicit\"></a> old\n\n> ## Quoted\n> old\n\n| A |\n|---|\n| old |\n\n```html\n<a id=\"literal\"></a>\n```\n\n<script>alert(1)</script>\n\n[bad](javascript:alert(1))\n\n<pre>\n<script>literal</script>\n</pre>\n"
+	current := "# *Same*\n\n<a id=\"explicit\"></a> new\n"
+	commit := comparison_for_test(t, current, baseline)
+	for tag in ([]string{"h1", "p", "blockquote", "table", "pre"}) {
+		testing.expect(t, strings.contains(commit.comparison_html, strings.concatenate({"<", tag, ` class="change-deleted">`})))
+	}
+	testing.expect_value(t, strings.count(commit.comparison_html, ` id="same"`), 1)
+	testing.expect_value(t, strings.count(commit.comparison_html, ` id="explicit"`), 1)
+	testing.expect(t, !strings.contains(commit.comparison_html, ` id="quoted"`))
+	testing.expect(t, strings.contains(commit.comparison_html, `<h2>Quoted</h2>`))
+	testing.expect(t, strings.contains(commit.comparison_html, `<a></a>`))
+	testing.expect_value(t, deleted_html(`<pre><code>literal id="keep"</code></pre>`), `<pre class="change-deleted"><code>literal id="keep"</code></pre>`)
+	testing.expect(t, !strings.contains(commit.comparison_html, "<script>"))
+	testing.expect(t, !strings.contains(commit.comparison_html, "javascript:"))
+	testing.expect(t, strings.contains(commit.comparison_html, "&lt;script&gt;literal&lt;/script&gt;"))
+	testing.expect(t, strings.contains(render_outline(&commit), `href="#same"`))
+	testing.expect(t, !strings.contains(render_outline(&commit), "Quoted"))
+}
+
+@(test)
+inline_deletions_live_updates_and_history :: proc(t: ^testing.T) {
+	root, path := make_fixture(t)
+	defer os.remove_all(root)
+	request := Watch_Request{repo_root = root, path = "docs with spaces/new name.md", commit_hash = "working"}
+	_, ok := render_watch_fragments(&request)
+	testing.expect(t, ok)
+	must_write(t, path, "# First\n")
+	live, live_ok, _ := render_watch_update(&request, Watch_Changes{contents = true}, "# First\n", true)
+	testing.expect(t, live_ok)
+	testing.expect(t, strings.contains(live, `<p class="change-deleted">Second snapshot.</p>`))
+	testing.expect(t, !strings.contains(live, "deletions hidden"))
+	must_git(t, root, []string{"add", "--", request.path})
+	must_git(t, root, []string{"commit", "-q", "-m", "remove paragraphs"})
+	refreshed, refresh_ok, _ := render_watch_update(&request, Watch_Changes{head = true}, "# First\n", true)
+	testing.expect(t, refresh_ok)
+	testing.expect(t, strings.contains(refreshed, `<p class="change-deleted">Second snapshot.</p>`))
+	history, _, loaded := load_history_snapshots(root, request.path)
+	testing.expect(t, loaded)
+	_, rendered := render_history_snapshot(&history, 1)
+	testing.expect(t, rendered)
+	testing.expect(t, strings.contains(snapshot_fragments(&history, 1), `<p class="change-deleted">Second snapshot.</p>`))
+	_, rendered = render_history_snapshot(&history, 2)
+	testing.expect(t, rendered)
+	testing.expect(t, !strings.contains(history.commits[2].comparison_html, "change-deleted"))
 }

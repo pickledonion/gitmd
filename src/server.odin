@@ -174,7 +174,7 @@ watch_request_path :: proc(target: string, repository: ^Repository) -> (string, 
 
 missing_working_fragments :: proc() -> string {
 	return strings.concatenate({
-		comparison_label_fragment(&Commit{comparison_label = "Comparison unavailable · deletions hidden"}),
+		comparison_label_fragment(&Commit{comparison_label = "Comparison unavailable"}),
 		`<article id="preview" class="markdown-body" aria-label="Markdown preview"><p>File is not available in the working tree.</p></article><section id="outline" class="outline" aria-label="Document outline" data-show="$sidebar === 'outline'">`,
 		render_sidebar_search("outline"),
 		`<ol></ol></section>`,
@@ -206,13 +206,13 @@ render_working_fragments :: proc(markdown: string, request: ^Watch_Request = nil
 			} else {
 				label := request.comparison.label
 				if len(baseline.full_hash) > 0 {
-					label = fmt.aprintf("Compared with %s · deletions hidden", baseline.short_hash)
+					label = fmt.aprintf("Compared with %s", baseline.short_hash)
 				}
 				compare_snapshot(&history.commits[0], baseline, label)
 			}
 		} else {
 			history.commits[0].comparison_html = history.commits[0].html
-			history.commits[0].comparison_label = "Comparison unavailable · deletions hidden"
+			history.commits[0].comparison_label = "Comparison unavailable"
 		}
 	}
 	return strings.concatenate({

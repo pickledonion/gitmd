@@ -94,12 +94,14 @@ make fish
 - See working-tree changes, commits, and Markdown file-list changes update
   automatically, or click a commit to view its fixed snapshot.
 - Enable **Show changes** below the sidebar tabs to highlight added or edited
-  blocks in pale green. The setting is off initially and lasts for the browser
-  tab, including navigation and reloads. The working tree compares with its
+  blocks in pale green and removed blocks in pale red at their former position.
+  Edits show the old block before its replacement. Turning the toggle off
+  restores the current document view. The setting is off initially and lasts for
+  the browser tab, including navigation and reloads. The working tree compares with its
   latest committed version when there are uncommitted edits. A clean working
   tree shows the latest commit's changes against the next older file-history
-  entry, just like selecting that commit. Comparisons follow renames. The label identifies the baseline. Deleted blocks
-  are hidden, and files with no previous version appear entirely added.
+  entry, just like selecting that commit. Comparisons follow renames. The label
+  identifies the baseline. Files with no previous version appear entirely added.
 - Select the sidebar or document pane with `←`/`h` and `→`/`l`.
 - In the sidebar, move through the active list with `↑`/`k` and `↓`/`j`.
 - In the document pane, scroll with `↑`/`k` and `↓`/`j`.

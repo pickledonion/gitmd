@@ -273,8 +273,8 @@ initial_page :: proc(history: ^History, repository: ^Repository = nil, selected_
 	return strings.clone(strings.to_string(builder))
 }
 
-STYLESHEET :: `:root { color-scheme: light dark; --bg:#fff; --fg:#1f2328; --muted:#656d76; --border:#d0d7de; --subtle:#f6f8fa; --selected:#ddf4ff; --accent:#0969da; --change-added:#dafbe1; --sidebar-width:minmax(260px,23vw); }
-@media (prefers-color-scheme:dark) { :root { --bg:#0d1117; --fg:#e6edf3; --muted:#8d96a0; --border:#30363d; --subtle:#161b22; --selected:#122d42; --accent:#58a6ff; --change-added:#173b27; } }
+STYLESHEET :: `:root { color-scheme: light dark; --bg:#fff; --fg:#1f2328; --muted:#656d76; --border:#d0d7de; --subtle:#f6f8fa; --selected:#ddf4ff; --accent:#0969da; --change-added:#dafbe1; --change-deleted:#ffebe9; --sidebar-width:minmax(260px,23vw); }
+@media (prefers-color-scheme:dark) { :root { --bg:#0d1117; --fg:#e6edf3; --muted:#8d96a0; --border:#30363d; --subtle:#161b22; --selected:#122d42; --accent:#58a6ff; --change-added:#173b27; --change-deleted:#4a2024; } }
 * { box-sizing:border-box; }
 html, body { height:100%; margin:0; }
 body { background:var(--bg); color:var(--fg); font:14px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; overflow:hidden; }
@@ -298,7 +298,10 @@ body { background:var(--bg); color:var(--fg); font:14px -apple-system,BlinkMacSy
 .changes-control label { display:flex; align-items:center; gap:6px; cursor:pointer; }
 .changes-control small { display:block; margin-top:6px; color:var(--muted); overflow-wrap:anywhere; }
 .show-changes .markdown-body .change-added { background:var(--change-added); }
-.show-changes .markdown-body .change-added tr { background:transparent; }
+body:not(.show-changes) .markdown-body .change-deleted { display:none; }
+.markdown-body .change-container { list-style:none; }
+.show-changes .markdown-body .change-deleted { background:var(--change-deleted); }
+.show-changes .markdown-body .change-added tr,.show-changes .markdown-body .change-deleted tr { background:transparent; }
 .file-browser,.history,.outline { display:flex; flex:1; min-height:0; flex-direction:column; overflow:hidden; }
 .file-browser>ol,.history>ol,.outline>ol { flex:1; min-height:0; overflow:auto; overflow-anchor:none; scroll-padding-block:1px; }
 .file-browser ol { list-style:none; padding:8px; margin:0; }.file-browser a { display:flex; gap:8px; align-items:center; padding:8px; border-radius:6px; color:inherit; text-decoration:none; overflow-wrap:anywhere; }.file-icon { color:var(--muted); font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
