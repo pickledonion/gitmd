@@ -18,6 +18,13 @@ Cmark_API :: struct {
 	parser_get_syntax_extensions: proc "c" (parser: rawptr) -> rawptr,
 	find_syntax_extension: proc "c" (name: cstring) -> rawptr,
 	render_html: proc "c" (root: rawptr, options: i32, extensions: rawptr) -> cstring,
+	node_first_child: proc "c" (node: rawptr) -> rawptr,
+	node_next: proc "c" (node: rawptr) -> rawptr,
+	node_get_type_string: proc "c" (node: rawptr) -> cstring,
+	node_get_start_line: proc "c" (node: rawptr) -> i32,
+	node_get_start_column: proc "c" (node: rawptr) -> i32,
+	node_get_end_line: proc "c" (node: rawptr) -> i32,
+	node_get_end_column: proc "c" (node: rawptr) -> i32,
 	node_free: proc "c" (node: rawptr),
 	get_default_mem: proc "c" () -> ^Cmark_Mem,
 	ensure_extensions: proc "c" (),
@@ -59,6 +66,13 @@ load_cmark_from :: proc(core_path, extensions_path: string) -> (Cmark_API, bool)
 	p, ok = load_symbol(core, "cmark_parser_get_syntax_extensions"); if !ok { return {}, false }; api.parser_get_syntax_extensions = auto_cast p
 	p, ok = load_symbol(core, "cmark_find_syntax_extension"); if !ok { return {}, false }; api.find_syntax_extension = auto_cast p
 	p, ok = load_symbol(core, "cmark_render_html"); if !ok { return {}, false }; api.render_html = auto_cast p
+	p, ok = load_symbol(core, "cmark_node_first_child"); if !ok { return {}, false }; api.node_first_child = auto_cast p
+	p, ok = load_symbol(core, "cmark_node_next"); if !ok { return {}, false }; api.node_next = auto_cast p
+	p, ok = load_symbol(core, "cmark_node_get_type_string"); if !ok { return {}, false }; api.node_get_type_string = auto_cast p
+	p, ok = load_symbol(core, "cmark_node_get_start_line"); if !ok { return {}, false }; api.node_get_start_line = auto_cast p
+	p, ok = load_symbol(core, "cmark_node_get_start_column"); if !ok { return {}, false }; api.node_get_start_column = auto_cast p
+	p, ok = load_symbol(core, "cmark_node_get_end_line"); if !ok { return {}, false }; api.node_get_end_line = auto_cast p
+	p, ok = load_symbol(core, "cmark_node_get_end_column"); if !ok { return {}, false }; api.node_get_end_column = auto_cast p
 	p, ok = load_symbol(core, "cmark_node_free"); if !ok { return {}, false }; api.node_free = auto_cast p
 	p, ok = load_symbol(core, "cmark_get_default_mem_allocator"); if !ok { return {}, false }; api.get_default_mem = auto_cast p
 	p, ok = load_symbol(ext, "cmark_gfm_core_extensions_ensure_registered"); if !ok { return {}, false }; api.ensure_extensions = auto_cast p
@@ -215,14 +229,16 @@ add_heading_ids :: proc(html: string) -> string {
 		relative_start := strings.index(html[position:], "<h")
 		if relative_start < 0 { break }
 		start := position + relative_start
-		if start + 3 >= len(html) || html[start + 2] < '1' || html[start + 2] > '6' || html[start + 3] != '>' {
+		if start + 3 >= len(html) || html[start + 2] < '1' || html[start + 2] > '6' || (html[start + 3] != '>' && html[start + 3] != ' ') {
 			strings.write_string(&builder, html[position:start + 2])
 			position = start + 2
 			continue
 		}
 		level := html[start + 2]
 		close := fmt.aprintf("</h%c>", level)
-		inner_start := start + 4
+		tag_end := find_byte_from(html, '>', start + 3)
+		if tag_end < 0 { break }
+		inner_start := tag_end + 1
 		relative_end := strings.index(html[inner_start:], close)
 		if relative_end < 0 { break }
 		end := inner_start + relative_end
@@ -240,7 +256,7 @@ add_heading_ids :: proc(html: string) -> string {
 			} else {
 				counts[slug] = count + 1
 			}
-			fmt.sbprintf(&builder, `<h%c id="%s">`, level, html_escape(id))
+			fmt.sbprintf(&builder, `<h%c id="%s"%s`, level, html_escape(id), html[start + 3:inner_start])
 			strings.write_string(&builder, html[inner_start:end + len(close)])
 		}
 		position = end + len(close)
@@ -249,33 +265,35 @@ add_heading_ids :: proc(html: string) -> string {
 	return strings.clone(strings.to_string(builder))
 }
 
-render_markdown :: proc(api: ^Cmark_API, markdown: string) -> (string, bool) {
+render_markdown_blocks :: proc(api: ^Cmark_API, markdown: string) -> (html, positioned_html: string, blocks: [dynamic]Markdown_Block, ok: bool) {
 	prepared_markdown := convert_safe_pre_blocks(markdown)
 	protected_markdown, anchors := protect_safe_anchors(prepared_markdown)
 	parser := api.parser_new(0)
-	if parser == nil { return "", false }
+	if parser == nil { return "", "", nil, false }
 	defer api.parser_free(parser)
 	extension_names := []cstring{"table", "tasklist", "autolink", "strikethrough", "tagfilter"}
 	for extension_name in extension_names {
 		extension := api.find_syntax_extension(extension_name)
 		if extension == nil || api.parser_attach_syntax_extension(parser, extension) == 0 {
-			return "", false
+			return "", "", nil, false
 		}
 	}
 	api.parser_feed(parser, raw_data(protected_markdown), uintptr(len(protected_markdown)))
 	document := api.parser_finish(parser)
-	if document == nil { return "", false }
+	if document == nil { return "", "", nil, false }
 	defer api.node_free(document)
-	html_c := api.render_html(document, 0, api.parser_get_syntax_extensions(parser))
-	if html_c == nil { return "", false }
-	html := strings.clone(string(html_c))
+	html_c := api.render_html(document, CMARK_OPT_SOURCEPOS, api.parser_get_syntax_extensions(parser))
+	if html_c == nil { return "", "", nil, false }
+	html = strings.clone(string(html_c))
 	api.get_default_mem().free(rawptr(html_c))
+	blocks = make([dynamic]Markdown_Block)
+	collect_markdown_blocks(api, document, api.parser_get_syntax_extensions(parser), anchors[:], &blocks)
 	for id, index in anchors {
 		token := fmt.aprintf("%s%dX", SAFE_ANCHOR_PREFIX, index)
 		anchor := fmt.aprintf(`<a id="%s"></a>`, html_escape(id))
 		html, _ = strings.replace_all(html, token, anchor)
 	}
-	return add_heading_ids(html), true
+	return add_heading_ids(mark_block_positions(html, nil)), add_heading_ids(html), blocks, true
 }
 
 render_all_snapshots :: proc(history: ^History) -> (string, bool) {
@@ -291,26 +309,61 @@ render_all_snapshots :: proc(history: ^History) -> (string, bool) {
 	return "", true
 }
 
-render_history_snapshot :: proc(history: ^History, index: int) -> (string, bool) {
-	if index < 0 || index >= len(history.commits) {
-		return "snapshot does not exist", false
-	}
+// Rendering a baseline never recursively loads its own baseline.
+ensure_snapshot_rendered :: proc(history: ^History, index: int) -> (string, bool) {
 	commit := &history.commits[index]
-	if len(commit.html) > 0 {
-		return "", true
-	}
-	if len(commit.markdown) == 0 && !commit.working {
+	if commit.rendered || len(commit.html) > 0 { return "", true }
+	if !commit.blob_loaded && len(commit.markdown) == 0 && !commit.working {
 		message, loaded := load_blob(history.repo_root, commit)
-		if !loaded {
-			return message, false
-		}
+		if !loaded { return message, false }
 	}
 	api, message, loaded := load_cmark()
 	if !loaded { return message, false }
-	html, rendered := render_markdown(&api, commit.markdown)
-	if !rendered {
-		return "cmark-gfm failed to render a committed snapshot", false
-	}
+	html, positioned, blocks, rendered := render_markdown_blocks(&api, commit.markdown)
+	if !rendered { return "cmark-gfm failed to render a snapshot", false }
 	commit.html = html
+	commit.positioned_html = positioned
+	commit.blocks = blocks
+	commit.rendered = true
+	return "", true
+}
+
+render_history_snapshot :: proc(history: ^History, index: int) -> (string, bool) {
+	if index < 0 || index >= len(history.commits) { return "snapshot does not exist", false }
+	message, rendered := ensure_snapshot_rendered(history, index)
+	if !rendered { return message, false }
+	commit := &history.commits[index]
+	if history.comparison_unavailable {
+		commit.comparison_html = commit.html
+		commit.comparison_label = "Comparison unavailable · deletions hidden"
+		return "", true
+	}
+	// A clean working copy represents the latest revision in the default view.
+	// Show that revision's changes, just as selecting it in History would.
+	if commit.working && !commit.dirty && index + 1 < len(history.commits) {
+		_, compared := render_history_snapshot(history, index + 1)
+		if compared {
+			latest := &history.commits[index + 1]
+			commit.comparison_html = latest.comparison_html
+			commit.comparison_label = latest.comparison_label
+		} else {
+			commit.comparison_html = commit.html
+			commit.comparison_label = "Comparison unavailable · deletions hidden"
+		}
+		return "", true
+	}
+	baseline: ^Commit
+	label := "No previous version · deletions hidden"
+	if index + 1 < len(history.commits) {
+		_, loaded := ensure_snapshot_rendered(history, index + 1)
+		if !loaded {
+			commit.comparison_html = commit.html
+			commit.comparison_label = "Comparison unavailable · deletions hidden"
+			return "", true
+		}
+		baseline = &history.commits[index + 1]
+		label = fmt.aprintf("Compared with %s · deletions hidden", baseline.short_hash)
+	}
+	compare_snapshot(commit, baseline, label)
 	return "", true
 }

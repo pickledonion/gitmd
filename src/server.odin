@@ -152,6 +152,13 @@ Watch_Request :: struct {
 	repo_root:   string,
 	path:        string,
 	commit_hash: string,
+	comparison: ^Watch_Comparison,
+}
+
+Watch_Comparison :: struct {
+	baseline: Commit,
+	ready: bool,
+	label: string,
 }
 
 watch_request_path :: proc(target: string, repository: ^Repository) -> (string, bool) {
@@ -167,21 +174,51 @@ watch_request_path :: proc(target: string, repository: ^Repository) -> (string, 
 
 missing_working_fragments :: proc() -> string {
 	return strings.concatenate({
+		comparison_label_fragment(&Commit{comparison_label = "Comparison unavailable · deletions hidden"}),
 		`<article id="preview" class="markdown-body" aria-label="Markdown preview"><p>File is not available in the working tree.</p></article><section id="outline" class="outline" aria-label="Document outline" data-show="$sidebar === 'outline'">`,
 		render_sidebar_search("outline"),
 		`<ol></ol></section>`,
 	})
 }
 
-render_working_fragments :: proc(markdown: string) -> (string, bool) {
+render_working_fragments :: proc(markdown: string, request: ^Watch_Request = nil) -> (string, bool) {
 	history := History{commits = make([dynamic]Commit, 0, 1)}
 	defer delete(history.commits)
 	append(&history.commits, Commit{markdown = markdown, working = true})
 	_, rendered := render_history_snapshot(&history, 0)
 	if !rendered { return "", false }
+	if request != nil {
+		if request.comparison == nil { request.comparison = new(Watch_Comparison) }
+		if !request.comparison.ready {
+			// Normally initialized by the first repository update in the stream.
+			_, _ = render_watch_fragments(request)
+		}
+		if request.comparison.ready {
+			baseline := &request.comparison.baseline
+			if len(baseline.full_hash) > 0 && markdown == baseline.markdown {
+				// Reverting live edits returns to the latest commit's comparison.
+				// Its older baseline is loaded only when this view is needed.
+				if len(baseline.comparison_label) == 0 {
+					return render_watch_fragments(request)
+				}
+				history.commits[0].comparison_html = baseline.comparison_html
+				history.commits[0].comparison_label = baseline.comparison_label
+			} else {
+				label := request.comparison.label
+				if len(baseline.full_hash) > 0 {
+					label = fmt.aprintf("Compared with %s · deletions hidden", baseline.short_hash)
+				}
+				compare_snapshot(&history.commits[0], baseline, label)
+			}
+		} else {
+			history.commits[0].comparison_html = history.commits[0].html
+			history.commits[0].comparison_label = "Comparison unavailable · deletions hidden"
+		}
+	}
 	return strings.concatenate({
 		preview_fragment(&history.commits[0]),
 		render_outline(&history.commits[0]),
+		comparison_label_fragment(&history.commits[0]),
 	}), true
 }
 
@@ -216,6 +253,8 @@ repository_watch_state :: proc(repo_root: string) -> (Repository_Watch_State, bo
 }
 
 render_watch_fragments :: proc(request: ^Watch_Request) -> (string, bool) {
+	if request.comparison == nil { request.comparison = new(Watch_Comparison) }
+	request.comparison.ready = false
 	repository, _, loaded_repository := load_repository(request.repo_root)
 	if !loaded_repository { return "", false }
 	repository.selected_file = -1
@@ -251,11 +290,20 @@ render_watch_fragments :: proc(request: ^Watch_Request) -> (string, bool) {
 	}
 	_, rendered := render_history_snapshot(&history, selected_commit)
 	if !rendered { return "", false }
+	if history.commits[selected_commit].working {
+		request.comparison.label = history.commits[selected_commit].comparison_label
+		request.comparison.baseline = {}
+		if selected_commit + 1 < len(history.commits) {
+			request.comparison.baseline = history.commits[selected_commit + 1]
+		}
+		request.comparison.ready = !strings.has_prefix(request.comparison.label, "Comparison unavailable")
+	}
 	return strings.concatenate({
 		render_files(&repository),
 		render_history(&history, selected_commit),
 		preview_fragment(&history.commits[selected_commit]),
 		render_outline(&history.commits[selected_commit]),
+		comparison_label_fragment(&history.commits[selected_commit]),
 	}), true
 }
 
@@ -311,7 +359,7 @@ render_watch_update :: proc(request: ^Watch_Request, changes: Watch_Changes, mar
 		files := render_files(&repository)
 		if request.commit_hash == "working" && changes.contents {
 			if exists {
-				working, working_rendered := render_working_fragments(markdown)
+				working, working_rendered := render_working_fragments(markdown, request)
 				if !working_rendered { return "", false, "files+working-error" }
 				return strings.concatenate({files, working}), true, "files+working"
 			}
@@ -322,7 +370,7 @@ render_watch_update :: proc(request: ^Watch_Request, changes: Watch_Changes, mar
 
 	if changes.contents && request.commit_hash == "working" {
 		if exists {
-			working, working_rendered := render_working_fragments(markdown)
+			working, working_rendered := render_working_fragments(markdown, request)
 			return working, working_rendered, "working"
 		}
 		return missing_working_fragments(), true, "missing"

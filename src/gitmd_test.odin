@@ -287,7 +287,7 @@ repository_lists_only_markdown_and_selects_requested_file :: proc(t: ^testing.T)
 		must_write(t, fresh_path, "# Fresh\n")
 		fresh := route_request("GET", "/fresh.md?partial=1", &history, "page", &repository)
 		testing.expect_value(t, fresh.status, 200)
-		testing.expect(t, strings.contains(fresh.body, `<h1 id="fresh">Fresh</h1>`))
+		testing.expect(t, strings.contains(fresh.body, `<h1 id="fresh" class="change-added">Fresh</h1>`))
 		testing.expect_value(t, repository.selected_file, 1)
 		testing.expect_value(t, repository.files[0], "docs with spaces/new name.md")
 		testing.expect_value(t, repository.files[1], "fresh.md")
@@ -345,8 +345,8 @@ repository_keeps_untracked_markdown_in_path_order :: proc(t: ^testing.T) {
 		response := route_request("GET", "/docs%20with%20spaces/S00.03-repository-tools.md?partial=1", &history, "page", &startup)
 		testing.expect_value(t, response.status, 200)
 		testing.expect_value(t, startup.selected_file, 3)
-		testing.expect(t, strings.contains(response.body, `<h1 id="repository-tools">Repository tools</h1>`))
-		testing.expect(t, strings.contains(response.body, "<p>Working-tree contents.</p>"))
+		testing.expect(t, strings.contains(response.body, `<h1 id="repository-tools" class="change-added">Repository tools</h1>`))
+		testing.expect(t, strings.contains(response.body, `<p class="change-added">Working-tree contents.</p>`))
 		if state < 2 {
 			if !testing.expect_value(t, len(history.commits), 1) { return }
 			testing.expect(t, history.commits[0].working)
@@ -627,4 +627,204 @@ occupied_repository_port_falls_back_to_available_port :: proc(t: ^testing.T) {
 	testing.expect_value(t, fallback_endpoint_err, nil)
 	if fallback_endpoint_err != nil { return }
 	testing.expect(t, fallback_endpoint.port != occupied_endpoint.port)
+}
+
+comparison_for_test :: proc(t: ^testing.T, current, baseline: string) -> Commit {
+	history := History{commits = make([dynamic]Commit)}
+	append(&history.commits, Commit{markdown = current, working = true, dirty = true}, Commit{markdown = baseline, blob_loaded = true, short_hash = "baseline"})
+	message, ok := render_history_snapshot(&history, 0)
+	testing.expectf(t, ok, "%s", message)
+	return history.commits[0]
+}
+
+@(test)
+block_comparison_add_edit_delete_repeat_and_empty :: proc(t: ^testing.T) {
+	cases := []struct {current, baseline: string, added: int} {
+		{"One.\n\nNew.\n\nTwo.\n", "One.\n\nTwo.\n", 1},
+		{"One edited.\n\nTwo.\n", "One.\n\nTwo.\n", 1},
+		{"Two.\n", "One.\n\nTwo.\n", 0},
+		{"Same.\n\nSame.\n\nSame.\n", "Same.\n\nSame.\n", 1},
+		{"Same.\n\nSame.\n", "Same.\n\nSame.\n", 0},
+		{"# New\n\nParagraph.\n", "", 2},
+		{"", "# Deleted\n", 0},
+		{"", "", 0},
+		{"# Same\n\n# Same\n", "# Removed\n\n# Same\n\n# Same\n", 0},
+		{"**Bold**\n", "__Bold__\n", 0},
+	}
+	for item in cases {
+		commit := comparison_for_test(t, item.current, item.baseline)
+		testing.expect_value(t, strings.count(commit.comparison_html, `class="change-added"`), item.added)
+		testing.expect(t, !strings.contains(commit.comparison_html, "data-sourcepos"))
+		testing.expect(t, !strings.contains(commit.html, "change-added"))
+	}
+}
+
+@(test)
+block_comparison_complex_units_and_safe_links :: proc(t: ^testing.T) {
+	baseline := "# Heading\n\n- [ ] item\n  - nested\n\n- unchanged\n\n> old quote\n\n| A |\n|---|\n| old |\n\n```odin\nold\n```\n"
+	current := "# Heading\n\n- [x] item\n  - edited nested\n\n- unchanged\n\n> new quote\n\n| A |\n|---|\n| new |\n\n```odin\nnew\n```\n"
+	commit := comparison_for_test(t, current, baseline)
+	testing.expect_value(t, strings.count(commit.comparison_html, `class="change-added"`), 4)
+	for tag in ([]string{"li", "blockquote", "table", "pre"}) {
+		testing.expectf(t, strings.contains(commit.comparison_html, strings.concatenate({"<", tag, ` class="change-added">`})), "missing highlight for %s: %s", tag, commit.comparison_html)
+	}
+	testing.expect(t, strings.contains(commit.comparison_html, `<h1 id="heading">Heading</h1>`))
+	testing.expect(t, strings.contains(render_outline(&commit), `href="#heading"`))
+	loose := comparison_for_test(t, "- new\n\n  nested paragraph\n", "- old\n\n  nested paragraph\n")
+	testing.expect_value(t, strings.count(loose.comparison_html, `class="change-added"`), 1)
+	anchors := comparison_for_test(t, "<a id=\"new\"></a> new\n\n<a id=\"safe\"></a> kept\n\n[heading](#heading)\n", "<a id=\"safe\"></a> kept\n\n[heading](#heading)\n")
+	testing.expect_value(t, strings.count(anchors.comparison_html, `class="change-added"`), 1)
+	testing.expect(t, strings.contains(anchors.comparison_html, `<a id="safe"></a>`))
+	testing.expect(t, strings.contains(anchors.comparison_html, `href="#heading"`))
+	safe := comparison_for_test(t, "# New\n\n<script>alert(1)</script>\n\n[bad](javascript:alert(1))\n\n<pre>\n<script>literal</script>\n</pre>\n", "")
+	testing.expect(t, strings.contains(safe.comparison_html, `<h1 id="new" class="change-added">`))
+	testing.expect(t, !strings.contains(safe.comparison_html, "<script>"))
+	testing.expect(t, !strings.contains(safe.comparison_html, "javascript:"))
+	testing.expect(t, strings.contains(safe.comparison_html, "&lt;script&gt;literal&lt;/script&gt;"))
+}
+
+@(test)
+comparison_history_baselines_rename_and_failure :: proc(t: ^testing.T) {
+	root, _ := make_fixture(t)
+	defer os.remove_all(root)
+	history, _, loaded := load_history_snapshots(root, "docs with spaces/new name.md")
+	testing.expect(t, loaded)
+	_, rendered := render_history_snapshot(&history, 1)
+	testing.expect(t, rendered)
+	testing.expect_value(t, strings.count(history.commits[1].comparison_html, `class="change-added"`), 1)
+	testing.expect(t, strings.contains(history.commits[1].comparison_label, history.commits[2].short_hash))
+	testing.expect(t, !history.commits[0].rendered && !history.commits[3].blob_loaded)
+	_, rendered = render_history_snapshot(&history, 2)
+	testing.expect(t, rendered)
+	testing.expect_value(t, history.commits[3].path, "docs with spaces/old name.md")
+	testing.expect_value(t, history.commits[2].comparison_html, history.commits[2].html)
+	_, rendered = render_history_snapshot(&history, 3)
+	testing.expect(t, rendered)
+	testing.expect_value(t, strings.count(history.commits[3].comparison_html, `class="change-added"`), 2)
+	testing.expect(t, strings.contains(history.commits[3].comparison_label, "No previous version"))
+	broken := History{repo_root = root, commits = make([dynamic]Commit)}
+	append(&broken.commits, Commit{markdown = "# Visible", working = true}, Commit{full_hash = "missing", path = "missing.md"})
+	_, rendered = render_history_snapshot(&broken, 0)
+	testing.expect(t, rendered)
+	testing.expect_value(t, broken.commits[0].comparison_html, broken.commits[0].html)
+	testing.expect(t, strings.contains(broken.commits[0].comparison_label, "Comparison unavailable"))
+}
+
+@(test)
+comparison_live_edits_reuse_baseline_and_refresh_after_commit :: proc(t: ^testing.T) {
+	root, path := make_fixture(t)
+	defer os.remove_all(root)
+	request := Watch_Request{repo_root = root, path = "docs with spaces/new name.md", commit_hash = "working"}
+	initial, ok := render_watch_fragments(&request)
+	testing.expect(t, ok && request.comparison.ready)
+	testing.expect(t, strings.contains(initial, `<p class="change-added">Second snapshot.</p>`))
+	old_blob := request.comparison.baseline.blob_hash
+	markdown := strings.concatenate({request.comparison.baseline.markdown, "\nLive addition.\n"})
+	must_write(t, path, markdown)
+	live, live_ok, _ := render_watch_update(&request, Watch_Changes{contents = true}, markdown, true)
+	testing.expect(t, live_ok)
+	testing.expect(t, strings.contains(live, `<p class="change-added">Live addition.</p>`))
+	testing.expect_value(t, request.comparison.baseline.blob_hash, old_blob)
+	testing.expect(t, !strings.contains(live, `<p class="change-added">Second snapshot.</p>`))
+	testing.expect(t, strings.contains(live, request.comparison.baseline.short_hash))
+
+	// Also cover a watcher opened while dirty, whose older baseline is not loaded.
+	dirty_request := Watch_Request{repo_root = root, path = request.path, commit_hash = "working"}
+	_, _ = render_watch_fragments(&dirty_request)
+	testing.expect_value(t, dirty_request.comparison.baseline.comparison_label, "")
+	must_write(t, path, request.comparison.baseline.markdown)
+	for watcher in ([]^Watch_Request{&request, &dirty_request}) {
+		reverted, reverted_ok, _ := render_watch_update(watcher, Watch_Changes{contents = true}, request.comparison.baseline.markdown, true)
+		testing.expect(t, reverted_ok)
+		testing.expect(t, strings.contains(reverted, `<p class="change-added">Second snapshot.</p>`))
+		testing.expect(t, !strings.contains(reverted, "Live addition."))
+	}
+	must_write(t, path, markdown)
+	must_git(t, root, []string{"add", "--", request.path})
+	must_git(t, root, []string{"commit", "-q", "-m", "live addition"})
+	refreshed, refresh_ok, _ := render_watch_update(&request, Watch_Changes{head = true}, markdown, true)
+	testing.expect(t, refresh_ok)
+	testing.expect(t, strings.contains(refreshed, `<p class="change-added">Live addition.</p>`))
+	testing.expect(t, !strings.contains(refreshed, `<p class="change-added">Second snapshot.</p>`))
+	testing.expect(t, request.comparison.baseline.blob_hash != old_blob)
+	new_path := test_path(root, "new.md")
+	must_write(t, new_path, "# Untracked\n")
+	new_history, _, new_ok := load_history_snapshots(root, "new.md")
+	testing.expect(t, new_ok)
+	_, new_ok = render_history_snapshot(&new_history, 0)
+	testing.expect(t, new_ok)
+	testing.expect(t, strings.contains(new_history.commits[0].comparison_html, `class="change-added"`))
+}
+
+@(test)
+comparison_toggle_is_outside_panels_and_persists_in_tab :: proc(t: ^testing.T) {
+	history := History{commits = make([dynamic]Commit)}
+	append(&history.commits, Commit{working = true, markdown = "# Heading"})
+	_, _ = render_history_snapshot(&history, 0)
+	page := initial_page(&history)
+	tabs_end := strings.index(page, "</nav>")
+	control := strings.index(page, `class="changes-control"`)
+	label := strings.index(page, `id="comparison-label"`)
+	panel := strings.index(page, `<section id="history"`)
+	testing.expect(t, tabs_end < control && control < label && label < panel)
+	testing.expect(t, strings.contains(page, "showChanges: false"))
+	testing.expect(t, strings.contains(page, "sessionStorage.getItem('gitmd-show-changes')"))
+	testing.expect(t, strings.contains(page, "sessionStorage.setItem('gitmd-show-changes'"))
+	testing.expect(t, strings.contains(page, `data-class:show-changes="$showChanges"`))
+	testing.expect(t, strings.contains(page, `data-bind:show-changes`))
+	testing.expect(t, strings.contains(snapshot_fragments(&history, 0), `id="comparison-label"`))
+	testing.expect(t, strings.contains(file_fragments(&history, 0), `id="comparison-label"`))
+	testing.expect(t, strings.contains(STYLESHEET, "--change-added:#dafbe1"))
+	testing.expect(t, strings.contains(STYLESHEET, "--change-added:#173b27"))
+}
+
+@(test)
+comparison_unborn_repository_and_unreadable_history :: proc(t: ^testing.T) {
+	root, err := os.make_directory_temp("", "gitmd-changes-*", context.allocator)
+	if err != nil { testing.fail_now(t) }
+	defer os.remove_all(root)
+	must_git(t, root, []string{"init", "-q"})
+	must_write(t, test_path(root, "new.md"), "# New document\n")
+	history, _, loaded := load_history_snapshots(root, "new.md")
+	testing.expect(t, loaded)
+	_, rendered := render_history_snapshot(&history, 0)
+	testing.expect(t, rendered)
+	testing.expect(t, strings.contains(history.commits[0].comparison_html, `class="change-added"`))
+	testing.expect(t, strings.contains(history.commits[0].comparison_label, "No previous version"))
+
+	broken_root, _ := make_fixture(t)
+	defer os.remove_all(broken_root)
+	oldest := must_git(t, broken_root, []string{"rev-parse", "HEAD~2"})
+	hash := trim_command_output(oldest.stdout)
+	remove_err := os.remove(test_path(broken_root, ".git", "objects", hash[:2], hash[2:]))
+	testing.expect(t, remove_err == nil)
+	broken, _, broken_loaded := load_history_snapshots(broken_root, "docs with spaces/new name.md")
+	testing.expect(t, broken_loaded && broken.comparison_unavailable)
+	_, rendered = render_history_snapshot(&broken, 0)
+	testing.expect(t, rendered)
+	testing.expect_value(t, broken.commits[0].comparison_html, broken.commits[0].html)
+	testing.expect(t, strings.contains(broken.commits[0].comparison_label, "Comparison unavailable"))
+}
+
+@(test)
+clean_default_comparison_matches_explicit_latest_commit :: proc(t: ^testing.T) {
+	root, path := make_fixture(t)
+	defer os.remove_all(root)
+	repository, _, loaded := load_repository(path)
+	testing.expect(t, loaded)
+	history: History
+	default_response := select_repository_file(&history, &repository, repository.selected_file)
+	testing.expect_value(t, default_response.status, 200)
+	testing.expect(t, !history.commits[0].dirty)
+	default_preview := preview_fragment(&history.commits[0])
+	default_label := history.commits[0].comparison_label
+	testing.expect(t, strings.contains(default_preview, `<p class="change-added">Second snapshot.</p>`))
+	testing.expect(t, strings.contains(default_label, history.commits[2].short_hash))
+	testing.expect(t, !strings.contains(default_label, history.commits[1].short_hash))
+	testing.expect(t, strings.contains(default_response.body, default_preview))
+	latest_hash := history.commits[1].full_hash
+	explicit_response := select_repository_file(&history, &repository, repository.selected_file, latest_hash, "history", true)
+	testing.expect_value(t, explicit_response.status, 200)
+	testing.expect_value(t, preview_fragment(&history.commits[1]), default_preview)
+	testing.expect_value(t, history.commits[1].comparison_label, default_label)
 }

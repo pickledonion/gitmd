@@ -15,6 +15,12 @@ Commit :: struct {
 	blob_hash:   string,
 	markdown:    string,
 	html:        string,
+	positioned_html: string,
+	blocks: [dynamic]Markdown_Block,
+	comparison_html: string,
+	comparison_label: string,
+	rendered: bool,
+	blob_loaded: bool,
 	working:     bool,
 	dirty:       bool,
 }
@@ -23,6 +29,7 @@ History :: struct {
 	repo_root: string,
 	path:      string,
 	commits:   [dynamic]Commit,
+	comparison_unavailable: bool,
 }
 
 Repository :: struct {
@@ -256,6 +263,8 @@ load_commit_list :: proc(repo_root, relative_path: string) -> ([dynamic]Commit, 
 	}
 	result := run_command(repo_root, args)
 	if !result.ok {
+		head := run_command(repo_root, []string{"/usr/bin/git", "rev-parse", "--verify", "HEAD"})
+		if !head.ok { return nil, "path has no committed snapshots", false }
 		return nil, "could not read Git history", false
 	}
 	commits, parsed := parse_history_log(result.stdout)
@@ -288,6 +297,7 @@ load_blob :: proc(repo_root: string, commit: ^Commit) -> (string, bool) {
 		return "could not read committed blob", false
 	}
 	commit.markdown = strings.clone(blob.stdout)
+	commit.blob_loaded = true
 	return "", true
 }
 
@@ -330,7 +340,7 @@ load_history_snapshots :: proc(repo_root, relative_path: string) -> (History, st
 		append(&all, working)
 	}
 	append(&all, ..commits[:])
-	return History{repo_root = repo_root, path = relative_path, commits = all}, "", true
+	return History{repo_root = repo_root, path = relative_path, commits = all, comparison_unavailable = !committed && history_message != "path has no committed snapshots"}, "", true
 }
 
 load_history :: proc(input_path: string) -> (History, string, bool) {

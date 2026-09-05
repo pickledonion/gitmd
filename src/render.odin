@@ -17,10 +17,16 @@ html_escape :: proc(value: string) -> string {
 }
 
 preview_fragment :: proc(commit: ^Commit) -> string {
+	html := commit.html
+	if len(commit.comparison_label) > 0 { html = commit.comparison_html }
 	return fmt.aprintf(
 		`<article id="preview" class="markdown-body" aria-label="Markdown preview">%s</article>`,
-		commit.html,
+		html,
 	)
+}
+
+comparison_label_fragment :: proc(commit: ^Commit) -> string {
+	return fmt.aprintf(`<small id="comparison-label" data-show="$showChanges" style="display:none">%s</small>`, html_escape(commit.comparison_label))
 }
 
 watch_fragment :: proc(history: ^History, selected_commit: int) -> string {
@@ -191,6 +197,7 @@ snapshot_fragments :: proc(history: ^History, selected_commit: int) -> string {
 		watch_fragment(history, selected_commit),
 		preview_fragment(&history.commits[selected_commit]),
 		render_outline(&history.commits[selected_commit]),
+		comparison_label_fragment(&history.commits[selected_commit]),
 	})
 }
 
@@ -201,6 +208,7 @@ file_fragments :: proc(history: ^History, selected_commit: int) -> string {
 		preview_fragment(&history.commits[selected_commit]),
 		render_history(history, selected_commit),
 		render_outline(&history.commits[selected_commit]),
+		comparison_label_fragment(&history.commits[selected_commit]),
 	})
 }
 
@@ -227,7 +235,9 @@ initial_page :: proc(history: ^History, repository: ^Repository = nil, selected_
 <link rel="stylesheet" href="/style.css">
 <script type="module" src="/datastar.js"></script>
 </head>
-<body data-signals="{{selected: %d, hashes: %s, sidebar: '%s', sidebarOpen: true, resizing: false, filesSearching: false, historySearching: false, outlineSearching: false, panel: 'sidebar', fileTimer: 0, historyTimer: 0}}"
+<body data-signals="{{selected: %d, hashes: %s, sidebar: '%s', sidebarOpen: true, showChanges: false, resizing: false, filesSearching: false, historySearching: false, outlineSearching: false, panel: 'sidebar', fileTimer: 0, historyTimer: 0}}"
+ data-init="try {{ $showChanges = sessionStorage.getItem('gitmd-show-changes') === 'true' }} catch {{}}"
+ data-class:show-changes="$showChanges"
  data-on:popstate__window="window.location.reload()"
  data-on:keydown__window="if ((($sidebar === 'files' && $filesSearching) || ($sidebar === 'history' && $historySearching) || ($sidebar === 'outline' && $outlineSearching)) && evt.key === 'Escape') {{ evt.preventDefault(); const section = document.querySelector($sidebar === 'files' ? '.file-browser' : $sidebar === 'history' ? '.history' : '.outline'); const input = section.querySelector('.sidebar-search input'); input.value = ''; section.querySelectorAll('li').forEach(item => item.hidden = false); if ($sidebar === 'files') $filesSearching = false; else if ($sidebar === 'history') $historySearching = false; else $outlineSearching = false; document.querySelector('.sidebar').focus() }} else if (!evt.metaKey && !evt.ctrlKey && !evt.altKey && !evt.shiftKey && evt.key === '/') {{ evt.preventDefault(); $sidebarOpen = true; $panel = 'sidebar'; if ($sidebar === 'files') $filesSearching = true; else if ($sidebar === 'history') $historySearching = true; else $outlineSearching = true; setTimeout(() => document.querySelector($sidebar === 'files' ? '.file-browser' : $sidebar === 'history' ? '.history' : '.outline').querySelector('.sidebar-search input').focus()) }} else if (evt.metaKey && !evt.ctrlKey && !evt.altKey && !evt.shiftKey && evt.key === 'b') {{ evt.preventDefault(); $sidebarOpen = !$sidebarOpen; $panel = $sidebarOpen ? 'sidebar' : 'main' }} else if (!evt.metaKey && !evt.ctrlKey && !evt.altKey && !evt.shiftKey && ['1','2','3'].includes(evt.key)) {{ evt.preventDefault(); $sidebar = ['files','history','outline'][Number(evt.key) - 1]; $sidebarOpen = true; $panel = 'sidebar' }} else if (!evt.metaKey && !evt.ctrlKey && !evt.altKey && !evt.shiftKey && ['ArrowUp','k','ArrowDown','j'].includes(evt.key)) {{ evt.preventDefault(); const previous = ['ArrowUp','k'].includes(evt.key); if ($panel === 'main') {{ document.querySelector('.preview-pane').scrollBy(0, previous ? -80 : 80) }} else {{ const section = document.querySelector($sidebar === 'files' ? '.file-browser' : $sidebar === 'history' ? '.history' : '.outline'); const links = section ? Array.from(section.querySelectorAll('a')).filter(link => !link.closest('li').hidden) : []; if (links.length) {{ let current = links.indexOf(section.querySelector('a.selected')); if (current < 0) current = links.indexOf(document.activeElement); if (current < 0) current = links.findIndex(link => link.getAttribute('aria-current') === 'page' || (location.hash && link.hash === location.hash)); const next = Math.max(0, Math.min(links.length - 1, current + (previous ? -1 : 1))); if (next !== current) {{ if ($sidebar === 'history') {{ const selected = section.querySelector('a.selected'); selected?.classList.remove('selected'); selected?.removeAttribute('aria-current'); links[next].classList.add('selected'); links[next].setAttribute('aria-current', 'page'); $selected = Number(links[next].dataset.index); const target = links[next]; target.focus({{preventScroll:true}}); const list = section.querySelector('ol'); const itemRect = target.getBoundingClientRect(); const listRect = list.getBoundingClientRect(); if (itemRect.top < listRect.top) list.scrollTop -= listRect.top - itemRect.top; else if (itemRect.bottom > listRect.bottom) list.scrollTop += itemRect.bottom - listRect.bottom; clearTimeout($historyTimer); $historyTimer = setTimeout(() => target.click(), 120) }} else if ($sidebar === 'files') {{ const selected = section.querySelector('a.selected'); selected?.classList.remove('selected'); selected?.removeAttribute('aria-current'); links[next].classList.add('selected'); links[next].setAttribute('aria-current', 'page'); links[next].focus({{preventScroll:true}}); links[next].scrollIntoView({{block:'nearest'}}); clearTimeout($fileTimer); const target = links[next]; $fileTimer = setTimeout(() => target.click(), 0) }} else links[next].click() }} if ($sidebar === 'outline' || next === current) links[next].focus() }} }} }}">
 <main class="layout" data-class:sidebar-hidden="!$sidebarOpen" data-class:resizing="$resizing"
@@ -238,7 +248,11 @@ initial_page :: proc(history: ^History, repository: ^Repository = nil, selected_
 <button type="button" aria-keyshortcuts="1" data-class:selected="$sidebar === 'files'" data-on:click="$sidebar = 'files'; $panel = 'sidebar'">Files</button>
 <button type="button" aria-keyshortcuts="2" data-class:selected="$sidebar === 'history'" data-on:click="$sidebar = 'history'; $panel = 'sidebar'">History</button>
 <button type="button" aria-keyshortcuts="3" data-class:selected="$sidebar === 'outline'" data-on:click="$sidebar = 'outline'; $panel = 'sidebar'">Outline</button>
-</nav>`, path, repo_name, selected_commit, hashes, sidebar, repo_name, path)
+</nav>
+<div class="changes-control">
+<label><input type="checkbox" data-bind:show-changes data-on:change="try {{ sessionStorage.setItem('gitmd-show-changes', String(evt.currentTarget.checked)) }} catch {{}}"> Show changes</label>`, path, repo_name, selected_commit, hashes, sidebar, repo_name, path)
+	strings.write_string(&builder, comparison_label_fragment(&history.commits[selected_commit]))
+	strings.write_string(&builder, "</div>")
 	if repository != nil {
 		strings.write_string(&builder, "\n")
 		strings.write_string(&builder, render_files(repository))
@@ -259,8 +273,8 @@ initial_page :: proc(history: ^History, repository: ^Repository = nil, selected_
 	return strings.clone(strings.to_string(builder))
 }
 
-STYLESHEET :: `:root { color-scheme: light dark; --bg:#fff; --fg:#1f2328; --muted:#656d76; --border:#d0d7de; --subtle:#f6f8fa; --selected:#ddf4ff; --accent:#0969da; --sidebar-width:minmax(260px,23vw); }
-@media (prefers-color-scheme:dark) { :root { --bg:#0d1117; --fg:#e6edf3; --muted:#8d96a0; --border:#30363d; --subtle:#161b22; --selected:#122d42; --accent:#58a6ff; } }
+STYLESHEET :: `:root { color-scheme: light dark; --bg:#fff; --fg:#1f2328; --muted:#656d76; --border:#d0d7de; --subtle:#f6f8fa; --selected:#ddf4ff; --accent:#0969da; --change-added:#dafbe1; --sidebar-width:minmax(260px,23vw); }
+@media (prefers-color-scheme:dark) { :root { --bg:#0d1117; --fg:#e6edf3; --muted:#8d96a0; --border:#30363d; --subtle:#161b22; --selected:#122d42; --accent:#58a6ff; --change-added:#173b27; } }
 * { box-sizing:border-box; }
 html, body { height:100%; margin:0; }
 body { background:var(--bg); color:var(--fg); font:14px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; overflow:hidden; }
@@ -280,6 +294,11 @@ body { background:var(--bg); color:var(--fg); font:14px -apple-system,BlinkMacSy
 .sidebar header strong { font-size:18px; }.sidebar header span { color:var(--muted); overflow-wrap:anywhere; }
 .sidebar-tabs { display:grid; flex:none; grid-template-columns:repeat(3,1fr); padding:8px; gap:6px; border-bottom:1px solid var(--border); background:var(--subtle); }
 .sidebar-tabs button { padding:7px; border:1px solid transparent; border-radius:6px; background:transparent; color:var(--muted); cursor:pointer; font-weight:600; }.sidebar-tabs button:hover { color:var(--fg); }.sidebar-tabs button.selected { color:var(--fg); border-color:var(--border); background:var(--bg); }
+.changes-control { flex:none; padding:10px 16px; border-bottom:1px solid var(--border); }
+.changes-control label { display:flex; align-items:center; gap:6px; cursor:pointer; }
+.changes-control small { display:block; margin-top:6px; color:var(--muted); overflow-wrap:anywhere; }
+.show-changes .markdown-body .change-added { background:var(--change-added); }
+.show-changes .markdown-body .change-added tr { background:transparent; }
 .file-browser,.history,.outline { display:flex; flex:1; min-height:0; flex-direction:column; overflow:hidden; }
 .file-browser>ol,.history>ol,.outline>ol { flex:1; min-height:0; overflow:auto; overflow-anchor:none; scroll-padding-block:1px; }
 .file-browser ol { list-style:none; padding:8px; margin:0; }.file-browser a { display:flex; gap:8px; align-items:center; padding:8px; border-radius:6px; color:inherit; text-decoration:none; overflow-wrap:anywhere; }.file-icon { color:var(--muted); font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
