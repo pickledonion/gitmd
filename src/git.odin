@@ -145,7 +145,33 @@ is_markdown_path :: proc(path: string) -> bool {
 	return strings.has_suffix(lower, ".md") || strings.has_suffix(lower, ".markdown")
 }
 
-load_repository :: proc(input_path: string) -> (Repository, string, bool) {
+list_repository_files :: proc(repo_root: string) -> ([dynamic]string, bool) {
+	listing := run_command(repo_root, []string{
+		"/usr/bin/git", "ls-files", "--cached", "--others", "--exclude-standard", "-z",
+	})
+	defer delete(listing.stdout)
+	defer delete(listing.stderr)
+	if !listing.ok { return nil, false }
+	files := make([dynamic]string, 0)
+	position := 0
+	for position < len(listing.stdout) {
+		end := find_byte_from(listing.stdout, 0, position)
+		if end < 0 { end = len(listing.stdout) }
+		path := listing.stdout[position:end]
+		if is_markdown_path(path) {
+			absolute, err := filepath.join([]string{repo_root, path}, context.temp_allocator)
+			// The index still lists paths removed or renamed outside Git.
+			if err == nil && os.is_file(absolute) {
+				append(&files, strings.clone(path))
+			}
+		}
+		position = end + 1
+	}
+	slice.sort(files[:])
+	return files, true
+}
+
+load_repository :: proc(input_path: string, allow_empty := false) -> (Repository, string, bool) {
 	absolute, abs_err := filepath.abs(input_path)
 	if abs_err != nil {
 		return {}, "could not resolve repository path", false
@@ -160,30 +186,15 @@ load_repository :: proc(input_path: string) -> (Repository, string, bool) {
 		return {}, "not inside a Git repository", false
 	}
 	repo_root := strings.clone(trim_command_output(root_result.stdout))
-	listing := run_command(repo_root, []string{
-		"/usr/bin/git", "ls-files", "--cached", "--others", "--exclude-standard", "-z",
-	})
-	if !listing.ok {
+	files, listed := list_repository_files(repo_root)
+	if !listed {
 		return {}, "could not list repository files", false
 	}
-	files := make([dynamic]string, 0)
-	position := 0
-	for position < len(listing.stdout) {
-		end := find_byte_from(listing.stdout, 0, position)
-		if end < 0 { end = len(listing.stdout) }
-		if end > position {
-			path := listing.stdout[position:end]
-			if is_markdown_path(path) {
-				append(&files, strings.clone(path))
-			}
-		}
-		position = end + 1
-	}
-	if len(files) == 0 {
+	if len(files) == 0 && !allow_empty {
 		return {}, "repository has no Markdown files", false
 	}
-	slice.sort(files[:])
 	selected := 0
+	if len(files) == 0 { selected = -1 }
 	if !is_directory {
 		relative, rel_err := filepath.rel(repo_root, absolute)
 		if rel_err != nil || starts_with_parent(relative) {

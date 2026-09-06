@@ -234,12 +234,14 @@ Repository_Watch_State :: struct {
 }
 
 repository_watch_state :: proc(repo_root: string) -> (Repository_Watch_State, bool) {
-	files_result := run_command(repo_root, []string{
-		"/usr/bin/git", "ls-files", "--cached", "--others", "--exclude-standard", "-z",
-	})
-	if !files_result.ok {
+	files, listed := list_repository_files(repo_root)
+	if !listed {
 		gitmd_logf("watch repository files failed repo=%s", repo_root)
 		return {}, false
+	}
+	defer {
+		for file in files { delete(file) }
+		delete(files)
 	}
 
 	head_result := run_command(repo_root, []string{"/usr/bin/git", "rev-parse", "--verify", "HEAD"})
@@ -249,13 +251,13 @@ repository_watch_state :: proc(repo_root: string) -> (Repository_Watch_State, bo
 	} else {
 		gitmd_logf("watch repository has no readable HEAD repo=%s", repo_root)
 	}
-	return Repository_Watch_State{files = files_result.stdout, head = head}, true
+	return Repository_Watch_State{files = strings.join(files[:], "\x00"), head = head}, true
 }
 
 render_watch_fragments :: proc(request: ^Watch_Request) -> (string, bool) {
 	if request.comparison == nil { request.comparison = new(Watch_Comparison) }
 	request.comparison.ready = false
-	repository, _, loaded_repository := load_repository(request.repo_root)
+	repository, _, loaded_repository := load_repository(request.repo_root, allow_empty = true)
 	if !loaded_repository { return "", false }
 	repository.selected_file = -1
 	for file, index in repository.files {
@@ -265,7 +267,13 @@ render_watch_fragments :: proc(request: ^Watch_Request) -> (string, bool) {
 		}
 	}
 	history, _, loaded_history := load_history_snapshots(request.repo_root, request.path)
-	if !loaded_history { return "", false }
+	if !loaded_history {
+		return strings.concatenate({
+			render_files(&repository),
+			render_history(&History{repo_root = request.repo_root, path = request.path}, -1),
+			missing_working_fragments(),
+		}), true
+	}
 	selected_commit := -1
 	for commit, index in history.commits {
 		if commit.full_hash == request.commit_hash || commit.short_hash == request.commit_hash {
@@ -340,7 +348,7 @@ render_watch_update :: proc(request: ^Watch_Request, changes: Watch_Changes, mar
 	}
 
 	if changes.files {
-		repository, _, loaded := load_repository(request.repo_root)
+		repository, _, loaded := load_repository(request.repo_root, allow_empty = true)
 		if !loaded {
 			return "", false, "files-error"
 		}
