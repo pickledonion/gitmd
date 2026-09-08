@@ -106,7 +106,7 @@ display_timestamp :: proc(author_date: string) -> string {
 render_outline :: proc(commit: ^Commit) -> string {
 	builder := strings.builder_make()
 	defer strings.builder_destroy(&builder)
-	strings.write_string(&builder, `<section id="outline" class="outline" aria-label="Document outline" data-show="$sidebar === 'outline'">`)
+	strings.write_string(&builder, `<section id="outline" class="outline" aria-label="Document outline" data-preserve-attr="style" data-show="$sidebar === 'outline'">`)
 	strings.write_string(&builder, render_sidebar_search("outline"))
 	strings.write_string(&builder, `<ol>`)
 	position := 0
@@ -145,7 +145,7 @@ render_outline :: proc(commit: ^Commit) -> string {
 render_history :: proc(history: ^History, selected_commit: int) -> string {
 	builder := strings.builder_make()
 	defer strings.builder_destroy(&builder)
-	strings.write_string(&builder, `<section id="history" class="history" aria-label="Commit history" data-show="$sidebar === 'history'">`)
+	strings.write_string(&builder, `<section id="history" class="history" aria-label="Commit history" data-preserve-attr="style" data-show="$sidebar === 'history'">`)
 	strings.write_string(&builder, render_sidebar_search("history"))
 	strings.write_string(&builder, `<ol>`)
 	for commit, index in history.commits {
@@ -157,7 +157,7 @@ render_history :: proc(history: ^History, selected_commit: int) -> string {
 		}
 		url := repository_url(history.path)
 		fmt.sbprintf(&builder, `
-<li><a id="commit-%s"%s href="%s?commit=%s&amp;sidebar=history" data-index="%d" data-on:click="if (evt.button !== 0 || evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey) return; evt.preventDefault(); clearTimeout($historyTimer); const current = evt.currentTarget.closest('.history').querySelector('a.selected'); if (current !== evt.currentTarget) {{ current?.classList.remove('selected'); current?.removeAttribute('aria-current'); evt.currentTarget.classList.add('selected'); evt.currentTarget.setAttribute('aria-current', 'page') }}; $selected = %d; @get('%s?commit=%s&amp;partial=1'); history.pushState(null, '', evt.currentTarget.href)">
+<li><a id="commit-%s"%s href="%s?commit=%s&amp;sidebar=history" data-index="%d" data-on:click="if (evt.button !== 0 || evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey) return; evt.preventDefault(); clearTimeout($historyTimer); const current = evt.currentTarget.closest('.history').querySelector('a.selected'); if (current !== evt.currentTarget) {{ current?.classList.remove('selected'); current?.removeAttribute('aria-current'); evt.currentTarget.classList.add('selected'); evt.currentTarget.setAttribute('aria-current', 'page') }}; $selected = %d; @get('%s?commit=%s&amp;partial=1'); history.pushState(null, '', evt.currentTarget.href); document.body.dataset.pageUrl = location.pathname + location.search">
 <span class="commit-subject">%s</span><span class="commit-meta"><code>%s</code><time datetime="%s">%s</time></span>
 </a></li>`, commit.full_hash, selected_class, url, commit.short_hash, index, index, url, commit.full_hash, html_escape(commit.subject), commit.short_hash, html_escape(commit.author_date), date)
 	}
@@ -165,12 +165,12 @@ render_history :: proc(history: ^History, selected_commit: int) -> string {
 	return strings.clone(strings.to_string(builder))
 }
 
-render_files :: proc(repository: ^Repository) -> string {
+render_files :: proc(repository: ^Repository, initial := false) -> string {
 	builder := strings.builder_make()
 	defer strings.builder_destroy(&builder)
 	fmt.sbprintf(
 		&builder,
-		`<section id="files" class="file-browser" aria-label="Markdown files" data-repository-name="%s" data-show="$sidebar === 'files'">
+		`<section id="files" class="file-browser" aria-label="Markdown files" data-repository-name="%s" data-preserve-attr="style" data-show="$sidebar === 'files'">
 `,
 		html_escape(repository_name(repository.repo_root)),
 	)
@@ -179,14 +179,17 @@ render_files :: proc(repository: ^Repository) -> string {
 	for file, index in repository.files {
 		selected_class := ""
 		if index == repository.selected_file {
-			selected_class = fmt.aprintf(
-				` class="selected" aria-current="page" data-init="document.getElementById('file-%d').scrollIntoView({{block:'nearest'}})"`,
-				index,
-			)
+			selected_class = ` class="selected" aria-current="page"`
+			if initial {
+				selected_class = fmt.aprintf(
+					` class="selected" aria-current="page" data-init="document.getElementById('file-%d').scrollIntoView({{block:'nearest'}})"`,
+					index,
+				)
+			}
 		}
 		url := repository_url(file)
 		fmt.sbprintf(&builder, `
-<li><a id="file-%d"%s href="%s" data-path="%s" data-on:click="if (evt.button !== 0 || evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey) return; evt.preventDefault(); const browser = evt.currentTarget.closest('.file-browser'); const current = browser.querySelector('a.selected'); if (current !== evt.currentTarget) {{ current?.classList.remove('selected'); current?.removeAttribute('aria-current'); evt.currentTarget.classList.add('selected'); evt.currentTarget.setAttribute('aria-current', 'page') }}; evt.currentTarget.focus({{preventScroll:true}}); evt.currentTarget.scrollIntoView({{block:'nearest'}}); $selected = 0; @get('%s?partial=1'); history.pushState(null, '', evt.currentTarget.href); document.title = evt.currentTarget.dataset.path + ' · ' + browser.dataset.repositoryName"><span class="file-icon" aria-hidden="true">#</span>%s</a></li>`, index, selected_class, url, html_escape(file), url, html_escape(file))
+<li><a id="file-%d"%s href="%s" data-path="%s" data-on:click="if (evt.button !== 0 || evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey) return; evt.preventDefault(); const browser = evt.currentTarget.closest('.file-browser'); const current = browser.querySelector('a.selected'); if (current !== evt.currentTarget) {{ current?.classList.remove('selected'); current?.removeAttribute('aria-current'); evt.currentTarget.classList.add('selected'); evt.currentTarget.setAttribute('aria-current', 'page') }}; evt.currentTarget.focus({{preventScroll:true}}); $selected = 0; @get('%s?partial=1'); history.pushState(null, '', evt.currentTarget.href); document.body.dataset.pageUrl = location.pathname + location.search; document.title = evt.currentTarget.dataset.path + ' · ' + browser.dataset.repositoryName"><span class="file-icon" aria-hidden="true">#</span>%s</a></li>`, index, selected_class, url, html_escape(file), url, html_escape(file))
 	}
 	strings.write_string(&builder, "\n</ol></section>")
 	return strings.clone(strings.to_string(builder))
@@ -236,10 +239,10 @@ initial_page :: proc(history: ^History, repository: ^Repository = nil, selected_
 <script type="module" src="/datastar.js"></script>
 </head>
 <body data-signals="{{selected: %d, hashes: %s, sidebar: '%s', sidebarOpen: true, showChanges: false, resizing: false, filesSearching: false, historySearching: false, outlineSearching: false, panel: 'sidebar', fileTimer: 0, historyTimer: 0}}"
- data-init="try {{ $showChanges = sessionStorage.getItem('gitmd-show-changes') === 'true' }} catch {{}}"
+ data-init="document.body.dataset.pageUrl = location.pathname + location.search; try {{ $showChanges = sessionStorage.getItem('gitmd-show-changes') === 'true' }} catch {{}}"
  data-class:show-changes="$showChanges"
- data-on:popstate__window="window.location.reload()"
- data-on:keydown__window="if ((($sidebar === 'files' && $filesSearching) || ($sidebar === 'history' && $historySearching) || ($sidebar === 'outline' && $outlineSearching)) && evt.key === 'Escape') {{ evt.preventDefault(); const section = document.querySelector($sidebar === 'files' ? '.file-browser' : $sidebar === 'history' ? '.history' : '.outline'); const input = section.querySelector('.sidebar-search input'); input.value = ''; section.querySelectorAll('li').forEach(item => item.hidden = false); if ($sidebar === 'files') $filesSearching = false; else if ($sidebar === 'history') $historySearching = false; else $outlineSearching = false; document.querySelector('.sidebar').focus() }} else if (!evt.metaKey && !evt.ctrlKey && !evt.altKey && !evt.shiftKey && evt.key === '/') {{ evt.preventDefault(); $sidebarOpen = true; $panel = 'sidebar'; if ($sidebar === 'files') $filesSearching = true; else if ($sidebar === 'history') $historySearching = true; else $outlineSearching = true; setTimeout(() => document.querySelector($sidebar === 'files' ? '.file-browser' : $sidebar === 'history' ? '.history' : '.outline').querySelector('.sidebar-search input').focus()) }} else if (evt.metaKey && !evt.ctrlKey && !evt.altKey && !evt.shiftKey && evt.key === 'b') {{ evt.preventDefault(); $sidebarOpen = !$sidebarOpen; $panel = $sidebarOpen ? 'sidebar' : 'main' }} else if (!evt.metaKey && !evt.ctrlKey && !evt.altKey && !evt.shiftKey && ['1','2','3'].includes(evt.key)) {{ evt.preventDefault(); $sidebar = ['files','history','outline'][Number(evt.key) - 1]; $sidebarOpen = true; $panel = 'sidebar' }} else if (!evt.metaKey && !evt.ctrlKey && !evt.altKey && !evt.shiftKey && ['ArrowUp','k','ArrowDown','j'].includes(evt.key)) {{ evt.preventDefault(); const previous = ['ArrowUp','k'].includes(evt.key); if ($panel === 'main') {{ document.querySelector('.preview-pane').scrollBy(0, previous ? -80 : 80) }} else {{ const section = document.querySelector($sidebar === 'files' ? '.file-browser' : $sidebar === 'history' ? '.history' : '.outline'); const links = section ? Array.from(section.querySelectorAll('a')).filter(link => !link.closest('li').hidden) : []; if (links.length) {{ let current = links.indexOf(section.querySelector('a.selected')); if (current < 0) current = links.indexOf(document.activeElement); if (current < 0) current = links.findIndex(link => link.getAttribute('aria-current') === 'page' || (location.hash && link.hash === location.hash)); const next = Math.max(0, Math.min(links.length - 1, current + (previous ? -1 : 1))); if (next !== current) {{ if ($sidebar === 'history') {{ const selected = section.querySelector('a.selected'); selected?.classList.remove('selected'); selected?.removeAttribute('aria-current'); links[next].classList.add('selected'); links[next].setAttribute('aria-current', 'page'); $selected = Number(links[next].dataset.index); const target = links[next]; target.focus({{preventScroll:true}}); const list = section.querySelector('ol'); const itemRect = target.getBoundingClientRect(); const listRect = list.getBoundingClientRect(); if (itemRect.top < listRect.top) list.scrollTop -= listRect.top - itemRect.top; else if (itemRect.bottom > listRect.bottom) list.scrollTop += itemRect.bottom - listRect.bottom; clearTimeout($historyTimer); $historyTimer = setTimeout(() => target.click(), 120) }} else if ($sidebar === 'files') {{ const selected = section.querySelector('a.selected'); selected?.classList.remove('selected'); selected?.removeAttribute('aria-current'); links[next].classList.add('selected'); links[next].setAttribute('aria-current', 'page'); links[next].focus({{preventScroll:true}}); links[next].scrollIntoView({{block:'nearest'}}); clearTimeout($fileTimer); const target = links[next]; $fileTimer = setTimeout(() => target.click(), 0) }} else links[next].click() }} if ($sidebar === 'outline' || next === current) links[next].focus() }} }} }}">
+ data-on:popstate__window="if (location.pathname + location.search !== document.body.dataset.pageUrl) window.location.reload()"
+ data-on:keydown__window="if ((($sidebar === 'files' && $filesSearching) || ($sidebar === 'history' && $historySearching) || ($sidebar === 'outline' && $outlineSearching)) && evt.key === 'Escape') {{ evt.preventDefault(); const section = document.querySelector($sidebar === 'files' ? '.file-browser' : $sidebar === 'history' ? '.history' : '.outline'); const input = section.querySelector('.sidebar-search input'); input.value = ''; section.querySelectorAll('li').forEach(item => item.hidden = false); if ($sidebar === 'files') $filesSearching = false; else if ($sidebar === 'history') $historySearching = false; else $outlineSearching = false; document.querySelector('.sidebar').focus() }} else if (!evt.metaKey && !evt.ctrlKey && !evt.altKey && !evt.shiftKey && evt.key === '/') {{ evt.preventDefault(); $sidebarOpen = true; $panel = 'sidebar'; if ($sidebar === 'files') $filesSearching = true; else if ($sidebar === 'history') $historySearching = true; else $outlineSearching = true; setTimeout(() => document.querySelector($sidebar === 'files' ? '.file-browser' : $sidebar === 'history' ? '.history' : '.outline').querySelector('.sidebar-search input').focus()) }} else if (evt.metaKey && !evt.ctrlKey && !evt.altKey && !evt.shiftKey && evt.key === 'b') {{ evt.preventDefault(); $sidebarOpen = !$sidebarOpen; $panel = $sidebarOpen ? 'sidebar' : 'main' }} else if (!evt.metaKey && !evt.ctrlKey && !evt.altKey && !evt.shiftKey && ['1','2','3'].includes(evt.key)) {{ evt.preventDefault(); $sidebar = ['files','history','outline'][Number(evt.key) - 1]; $sidebarOpen = true; $panel = 'sidebar' }} else if (!evt.metaKey && !evt.ctrlKey && !evt.altKey && !evt.shiftKey && ['ArrowUp','k','ArrowDown','j'].includes(evt.key)) {{ evt.preventDefault(); const previous = ['ArrowUp','k'].includes(evt.key); if ($panel === 'main') {{ document.querySelector('.preview-pane').scrollBy(0, previous ? -80 : 80) }} else {{ const section = document.querySelector($sidebar === 'files' ? '.file-browser' : $sidebar === 'history' ? '.history' : '.outline'); const links = section ? Array.from(section.querySelectorAll('a')).filter(link => !link.closest('li').hidden) : []; if (links.length) {{ let current = links.indexOf(section.querySelector('a.selected')); if (current < 0) current = links.indexOf(document.activeElement); if (current < 0) current = links.findIndex(link => link.getAttribute('aria-current') === 'page' || (location.hash && link.hash === location.hash)); const next = Math.max(0, Math.min(links.length - 1, current + (previous ? -1 : 1))); if (next !== current) {{ if ($sidebar === 'history') {{ const selected = section.querySelector('a.selected'); selected?.classList.remove('selected'); selected?.removeAttribute('aria-current'); links[next].classList.add('selected'); links[next].setAttribute('aria-current', 'page'); $selected = Number(links[next].dataset.index); const target = links[next]; target.focus({{preventScroll:true}}); const list = section.querySelector('ol'); const itemRect = target.getBoundingClientRect(); const listRect = list.getBoundingClientRect(); if (itemRect.top < listRect.top) list.scrollTop -= listRect.top - itemRect.top; else if (itemRect.bottom > listRect.bottom) list.scrollTop += itemRect.bottom - listRect.bottom; clearTimeout($historyTimer); $historyTimer = setTimeout(() => target.click(), 120) }} else if ($sidebar === 'files') {{ const selected = section.querySelector('a.selected'); selected?.classList.remove('selected'); selected?.removeAttribute('aria-current'); links[next].classList.add('selected'); links[next].setAttribute('aria-current', 'page'); const target = links[next]; target.focus({{preventScroll:true}}); const list = section.querySelector('ol'); const itemRect = target.getBoundingClientRect(); const listRect = list.getBoundingClientRect(); if (itemRect.top < listRect.top) list.scrollTop -= listRect.top - itemRect.top; else if (itemRect.bottom > listRect.bottom) list.scrollTop += itemRect.bottom - listRect.bottom; clearTimeout($fileTimer); $fileTimer = setTimeout(() => target.click(), 0) }} else links[next].click() }} if ($sidebar === 'outline' || next === current) links[next].focus() }} }} }}">
 <main class="layout" data-class:sidebar-hidden="!$sidebarOpen" data-class:resizing="$resizing"
  data-on:keydown__window="if (!evt.metaKey && !evt.ctrlKey && !evt.altKey && !evt.shiftKey && ['ArrowLeft','h','ArrowRight','l'].includes(evt.key)) {{ evt.preventDefault(); if (['ArrowLeft','h'].includes(evt.key)) {{ $sidebarOpen = true; $panel = 'sidebar'; setTimeout(() => document.querySelector('.sidebar').focus({{preventScroll:true}})) }} else {{ $panel = 'main'; document.querySelector('.preview-pane').focus({{preventScroll:true}}) }} }}">
 <aside class="sidebar" tabindex="-1" data-class:panel-selected="$panel === 'sidebar'" data-on:pointerdown="$panel = 'sidebar'">
@@ -255,7 +258,7 @@ initial_page :: proc(history: ^History, repository: ^Repository = nil, selected_
 	strings.write_string(&builder, "</div>")
 	if repository != nil {
 		strings.write_string(&builder, "\n")
-		strings.write_string(&builder, render_files(repository))
+		strings.write_string(&builder, render_files(repository, initial = true))
 	}
 	strings.write_string(&builder, render_history(history, selected_commit))
 	strings.write_string(&builder, render_outline(&history.commits[selected_commit]))
@@ -290,8 +293,8 @@ body { background:var(--bg); color:var(--fg); font:14px -apple-system,BlinkMacSy
 .sidebar.panel-selected { background:color-mix(in srgb,var(--selected) 28%,var(--subtle)); }
 .preview-pane.panel-selected { background:color-mix(in srgb,var(--selected) 18%,var(--bg)); }
 .sidebar:focus,.preview-pane:focus { outline:none; }
-.sidebar header { display:flex; flex-direction:column; gap:4px; padding:16px; border-bottom:1px solid var(--border); }
-.sidebar header strong { font-size:18px; }.sidebar header span { color:var(--muted); overflow-wrap:anywhere; }
+.sidebar header { display:flex; flex:none; flex-direction:column; gap:4px; padding:16px; border-bottom:1px solid var(--border); }
+.sidebar header strong { font-size:18px; }.sidebar header span { color:var(--muted); overflow-wrap:anywhere; line-height:1.2; height:2.4em; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
 .sidebar-tabs { display:grid; flex:none; grid-template-columns:repeat(3,1fr); padding:8px; gap:6px; border-bottom:1px solid var(--border); background:var(--subtle); }
 .sidebar-tabs button { padding:7px; border:1px solid transparent; border-radius:6px; background:transparent; color:var(--muted); cursor:pointer; font-weight:600; }.sidebar-tabs button:hover { color:var(--fg); }.sidebar-tabs button.selected { color:var(--fg); border-color:var(--border); background:var(--bg); }
 .changes-control { flex:none; padding:10px 16px; border-bottom:1px solid var(--border); }

@@ -123,7 +123,8 @@ make fish
   Homebrew's `cmark-gfm` libraries.
 - Runs a minimal Odin `core:net` HTTP server on `127.0.0.1`.
 - Derives a stable localhost port from the repository path, allowing multiple
-  repositories to use repeatable URLs at the same time.
+  repositories to use repeatable URLs at the same time. If that port is occupied,
+  startup reports an error instead of choosing a random port.
 - Watches repository state and the selected file with a server-sent event
   stream and uses Datastar to morph refreshed Files, History, `#preview`, and
   `#outline` fragments into the page.

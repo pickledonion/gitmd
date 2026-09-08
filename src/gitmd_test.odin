@@ -166,7 +166,7 @@ snapshot_routes_are_fragments :: proc(t: ^testing.T) {
 	testing.expect(t, strings.contains(page, "outlineSearching: false"))
 	testing.expect(t, strings.contains(page, "panel: 'sidebar'"))
 	testing.expect(t, strings.contains(page, "fileTimer: 0"))
-	testing.expect(t, strings.contains(page, `data-on:popstate__window="window.location.reload()"`))
+	testing.expect(t, strings.contains(page, `data-on:popstate__window="if (location.pathname + location.search !== document.body.dataset.pageUrl) window.location.reload()"`))
 	testing.expect(t, strings.contains(page, "evt.metaKey"))
 	testing.expect(t, strings.contains(page, "$sidebarOpen = !$sidebarOpen"))
 	testing.expect(t, strings.contains(page, `['1','2','3'].includes(evt.key)`))
@@ -176,7 +176,7 @@ snapshot_routes_are_fragments :: proc(t: ^testing.T) {
 	testing.expect(t, strings.contains(page, `document.querySelector('.preview-pane').focus({preventScroll:true})`))
 	testing.expect(t, strings.contains(page, `document.querySelector('.preview-pane').scrollBy(0, previous ? -80 : 80)`))
 	testing.expect(t, strings.contains(page, `Array.from(section.querySelectorAll('a')).filter(link => !link.closest('li').hidden)`))
-	testing.expect(t, strings.contains(page, `links[next].scrollIntoView({block:'nearest'})`))
+	testing.expect(t, !strings.contains(page, `links[next].scrollIntoView`))
 	testing.expect(t, strings.contains(page, `let current = links.indexOf(section.querySelector('a.selected'))`))
 	testing.expect(t, strings.contains(page, `$fileTimer = setTimeout(() => target.click(), 0)`))
 	testing.expect(t, strings.contains(page, `target.focus({preventScroll:true})`))
@@ -543,6 +543,7 @@ repository_page_has_file_and_history_modes :: proc(t: ^testing.T) {
 	page := initial_page(&history, &repository, 1)
 	modifier_guard := `if (evt.button !== 0 || evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey) return; evt.preventDefault();`
 	files := render_files(&repository)
+	testing.expect(t, !strings.contains(files, `data-init=`))
 	commits := render_history(&history, 1)
 	testing.expect(t, strings.contains(files, modifier_guard))
 	testing.expect(t, strings.contains(commits, modifier_guard))
@@ -550,7 +551,7 @@ repository_page_has_file_and_history_modes :: proc(t: ^testing.T) {
 	testing.expect(t, strings.contains(commits, `history.pushState(null, '', evt.currentTarget.href)`))
 	testing.expect(t, !strings.contains(files, `history.replaceState`))
 	testing.expect(t, !strings.contains(commits, `history.replaceState`))
-	testing.expect(t, strings.contains(page, `data-on:popstate__window="window.location.reload()"`))
+	testing.expect(t, strings.contains(page, `data-on:popstate__window="if (location.pathname + location.search !== document.body.dataset.pageUrl) window.location.reload()"`))
 	testing.expect(t, strings.contains(page, `<title>docs/guide.md · project-name</title>`))
 	testing.expect(t, strings.contains(page, `<header><strong>project-name</strong>`))
 	testing.expect(t, strings.contains(page, `data-repository-name="project-name"`))
@@ -580,7 +581,8 @@ repository_page_has_file_and_history_modes :: proc(t: ^testing.T) {
 	testing.expect(t, strings.contains(page, `href="/docs/guide.md?commit=aaaaaaa&amp;sidebar=history"`))
 	testing.expect(t, strings.contains(page, `aria-current="page"`))
 	testing.expect(t, strings.contains(page, `id="file-1" class="selected" aria-current="page" data-init="document.getElementById('file-1').scrollIntoView({block:'nearest'})"`))
-	testing.expect(t, strings.contains(page, `evt.currentTarget.focus({preventScroll:true}); evt.currentTarget.scrollIntoView({block:'nearest'})`))
+	testing.expect(t, strings.contains(page, `evt.currentTarget.focus({preventScroll:true}); $selected = 0`))
+	testing.expect(t, !strings.contains(files, `evt.currentTarget.scrollIntoView`))
 	testing.expect(t, strings.contains(page, `@get('/docs/guide.md?partial=1')`))
 	testing.expect(t, strings.contains(page, `id="commit-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" class="selected" aria-current="page"`))
 	testing.expect(t, !strings.contains(page, `data-class:selected="$selected === 1"`))
@@ -610,7 +612,7 @@ repository_ports_are_stable_and_path_specific :: proc(t: ^testing.T) {
 }
 
 @(test)
-occupied_repository_port_falls_back_to_available_port :: proc(t: ^testing.T) {
+occupied_repository_port_is_not_reassigned :: proc(t: ^testing.T) {
 	occupied, listen_err := net.listen_tcp({net.IP4_Loopback, 0})
 	testing.expect_value(t, listen_err, nil)
 	if listen_err != nil { return }
@@ -619,14 +621,9 @@ occupied_repository_port_falls_back_to_available_port :: proc(t: ^testing.T) {
 	testing.expect_value(t, endpoint_err, nil)
 	if endpoint_err != nil { return }
 
-	listener, fallback_err := listen_with_fallback(occupied_endpoint.port)
-	testing.expect_value(t, fallback_err, nil)
-	if fallback_err != nil { return }
-	defer net.close(listener)
-	fallback_endpoint, fallback_endpoint_err := net.bound_endpoint(listener)
-	testing.expect_value(t, fallback_endpoint_err, nil)
-	if fallback_endpoint_err != nil { return }
-	testing.expect(t, fallback_endpoint.port != occupied_endpoint.port)
+	listener, bind_err := net.listen_tcp({net.IP4_Loopback, occupied_endpoint.port})
+	testing.expect(t, bind_err != nil)
+	if bind_err == nil { net.close(listener) }
 }
 
 comparison_for_test :: proc(t: ^testing.T, current, baseline: string) -> Commit {
