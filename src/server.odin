@@ -80,6 +80,10 @@ route_request :: proc(method, target: string, history: ^History, page: string, r
 		return {status = 200, reason = "OK", content_type = "text/html; charset=utf-8", body = page}
 	case "/datastar.js":
 		return {status = 200, reason = "OK", content_type = "text/javascript; charset=utf-8", body = string(DATSTAR_BUNDLE)}
+	case "/find":
+		return repository_find_response(repository)
+	case "/find.js":
+		return {status = 200, reason = "OK", content_type = "text/javascript; charset=utf-8", body = string(FIND_SCRIPT)}
 	case "/style.css":
 		return {status = 200, reason = "OK", content_type = "text/css; charset=utf-8", body = STYLESHEET}
 	}
@@ -559,6 +563,7 @@ handle_connection :: proc(socket: net.TCP_Socket, history: ^History, page: strin
 	)
 	send_started := time.tick_now()
 	send_response(socket, response)
+	if response.content_type == "application/json; charset=utf-8" { delete(response.body) }
 	gitmd_logf(
 		"http response sent target=%s send_ms=%d total_ms=%d",
 		parts[1],

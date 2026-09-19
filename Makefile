@@ -1,4 +1,5 @@
 ODIN ?= odin
+NODE ?= node
 BIN := build/gitmd
 FISH_FUNCTIONS_DIR ?= $(HOME)/.config/fish/functions
 
@@ -15,6 +16,7 @@ $(BIN): $(shell find src -type f)
 
 test:
 	$(ODIN) test src -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_TRACK_MEMORY=false
+	$(NODE) --test tests/*.test.mjs
 
 run:
 	@$(BIN)

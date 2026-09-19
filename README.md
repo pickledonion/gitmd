@@ -36,7 +36,7 @@ make run
 make
 ```
 
-- Run the tests:
+- Run the tests (requires Node.js for the browser search tests):
 
 ```fish
 make test
@@ -84,7 +84,9 @@ make fish
   passed through to the app.
 
 - Open the localhost URL printed by the CLI.
-- Switch among Files, History, and Outline with `1`, `2`, and `3`.
+- Switch among ID, Files, History, and Outline with `1`, `2`, `3`, and `4`.
+  - ID lists headings and explicit anchor IDs across the current Markdown files.
+    Select a definition to jump to it. Definitions refresh when you enter the tab.
   - Files lists tracked and untracked `.md` and `.markdown` files that exist
     in the working tree, sorted case-sensitively by full repository-relative path. Staging or
     committing a file does not change its position.
@@ -105,9 +107,14 @@ make fish
 - Select the sidebar or document pane with `←`/`h` and `→`/`l`.
 - In the sidebar, move through the active list with `↑`/`k` and `↓`/`j`.
 - In the document pane, scroll with `↑`/`k` and `↓`/`j`.
-- Press `/` to fuzzy-filter the active sidebar list as you type. Files,
-  History, and Outline each retain their own query and open state.
-- Press `Esc` to clear and close the active search.
+- Press `/` to show the fuzzy filter inside the active tab. ID, Files,
+  History, and Outline each keep their own query and filter visibility.
+  ID matches heading text, anchor IDs, and file paths. Filtering previews the
+  selected match as results change. Moving with `↑`/`↓`
+  (or `k`/`j` outside the filter) previews the selected definition automatically;
+  `Enter` or a click jumps immediately. The ID tab, query, and input focus stay
+  in place while previewing. No `fzf` installation is needed.
+- Press `Esc` to clear and hide the active filter, staying in the current tab.
 - Press `⌘B` to toggle the sidebar. Other modifier shortcuts are ignored so
   normal selection and copy shortcuts continue to work.
 - Resize the sidebar by dragging the divider or focusing it and using the
