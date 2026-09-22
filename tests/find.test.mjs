@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {fuzzyScore, rankTargets, buildIdTree, filterIdTree, expandIdPath} from '../src/assets/find.mjs';
+import {fuzzyScore, rankTargets, buildIdTree, filterIdTree, expandIdPath, watchIdUpdates} from '../src/assets/find.mjs';
 
 test('fuzzy matches preserve order and prefer exact, prefix, and contiguous matches', () => {
   assert.equal(fuzzyScore('T-42', 't-42'), 10000);
@@ -109,4 +109,23 @@ test('leaving ID search opens the selected branch and its ancestors without chan
   const before = [...expanded];
   assert.equal(expandIdPath(tree, 'missing', expanded), false);
   assert.deepEqual([...expanded], before);
+});
+
+
+test('live watch patches refresh IDs, excluding navigation and unrelated fetch events', () => {
+  const events = new EventTarget();
+  let refreshes = 0;
+  watchIdUpdates(events, () => refreshes++);
+  const emit = (type, id) => {
+    const event = new Event('datastar-fetch');
+    event.detail = {type, el: {id}};
+    events.dispatchEvent(event);
+  };
+  emit('started', 'watch');
+  emit('datastar-patch-elements', 'ids');
+  emit('finished', 'watch');
+  assert.equal(refreshes, 0);
+  emit('datastar-patch-elements', 'watch');
+  emit('datastar-patch-elements', 'watch');
+  assert.equal(refreshes, 2);
 });

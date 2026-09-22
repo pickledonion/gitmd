@@ -185,6 +185,13 @@ function highlight(element, text, query) {
   });
 }
 
+// Watch patches update the preview and file list while the ID tab stays open.
+export function watchIdUpdates(events, refresh) {
+  events.addEventListener('datastar-fetch', event => {
+    if (event.detail?.type === 'datastar-patch-elements' && event.detail.el?.id === 'watch') refresh();
+  });
+}
+
 function installIdBrowser() {
   const root = document.querySelector('.id-browser');
   if (!root) return;
@@ -360,13 +367,14 @@ function installIdBrowser() {
     return false;
   }
 
-  async function refresh() {
+  async function refresh(background = false) {
+    const selectedKey = background ? rows[selected]?.node.key : undefined;
     request?.abort();
     const initialQuery = input.value;
     loading = true;
     error = false;
     skipped = 0;
-    render(false);
+    render(false, selectedKey);
     request = new AbortController();
     const current = request;
     try {
@@ -385,10 +393,10 @@ function installIdBrowser() {
     const queryChanged = input.value !== initialQuery;
     // A file chosen in Files may be excluded by the previous ID query.
     const inCurrentFile = target => new URL(target.url, location.origin).pathname === location.pathname;
-    if (!queryChanged && targets.some(inCurrentFile) && !rankTargets(targets, input.value).some(inCurrentFile)) input.value = '';
+    if (!background && !queryChanged && targets.some(inCurrentFile) && !rankTargets(targets, input.value).some(inCurrentFile)) input.value = '';
     tree = buildIdTree(targets);
     revealCurrent(tree);
-    render(queryChanged);
+    render(!background && queryChanged, selectedKey);
   }
 
   function navigate(key) {
@@ -420,6 +428,9 @@ function installIdBrowser() {
     rows[selected]?.control.scrollIntoView({block: 'nearest'});
   });
   document.addEventListener('gitmd-id-key', event => navigate(event.detail));
+  watchIdUpdates(document, () => {
+    if (active) refresh(true);
+  });
   document.addEventListener('gitmd-id-tab', event => {
     const entering = event.detail && !active;
     active = event.detail;
