@@ -145,6 +145,13 @@ is_markdown_path :: proc(path: string) -> bool {
 	return strings.has_suffix(lower, ".md") || strings.has_suffix(lower, ".markdown")
 }
 
+is_source_path :: proc(path, absolute: string) -> bool {
+	if strings.has_suffix(strings.to_lower(path, context.temp_allocator), ".odin") { return true }
+	if len(filepath.ext(path)) > 0 { return false }
+	contents, err := os.read_entire_file(absolute, context.temp_allocator)
+	return err == nil && strings.has_prefix(string(contents), "#!")
+}
+
 list_repository_files :: proc(repo_root: string) -> ([dynamic]string, bool) {
 	listing := run_command(repo_root, []string{
 		"/usr/bin/git", "ls-files", "--cached", "--others", "--exclude-standard", "-z",
@@ -158,12 +165,10 @@ list_repository_files :: proc(repo_root: string) -> ([dynamic]string, bool) {
 		end := find_byte_from(listing.stdout, 0, position)
 		if end < 0 { end = len(listing.stdout) }
 		path := listing.stdout[position:end]
-		if is_markdown_path(path) {
-			absolute, err := filepath.join([]string{repo_root, path}, context.temp_allocator)
-			// The index still lists paths removed or renamed outside Git.
-			if err == nil && os.is_file(absolute) {
-				append(&files, strings.clone(path))
-			}
+		absolute, err := filepath.join([]string{repo_root, path}, context.temp_allocator)
+		// The index still lists paths removed or renamed outside Git.
+		if err == nil && os.is_file(absolute) && (is_markdown_path(path) || is_source_path(path, absolute)) {
+			append(&files, strings.clone(path))
 		}
 		position = end + 1
 	}
@@ -191,7 +196,7 @@ load_repository :: proc(input_path: string, allow_empty := false) -> (Repository
 		return {}, "could not list repository files", false
 	}
 	if len(files) == 0 && !allow_empty {
-		return {}, "repository has no Markdown files", false
+		return {}, "repository has no supported files", false
 	}
 	selected := 0
 	if len(files) == 0 { selected = -1 }
@@ -209,7 +214,7 @@ load_repository :: proc(input_path: string, allow_empty := false) -> (Repository
 			}
 		}
 		if !found {
-			return {}, "path is not a Markdown file in the repository", false
+			return {}, "path is not a supported file in the repository", false
 		}
 	} else {
 		for path, index in files {
@@ -375,7 +380,7 @@ load_history :: proc(input_path: string) -> (History, string, bool) {
 
 load_repository_history :: proc(repository: ^Repository, index: int) -> (History, string, bool) {
 	if index < 0 || index >= len(repository.files) {
-		return {}, "Markdown file does not exist", false
+		return {}, "file does not exist", false
 	}
 	path := repository.files[index]
 	return load_history_snapshots(repository.repo_root, path)

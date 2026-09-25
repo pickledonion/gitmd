@@ -187,6 +187,7 @@ missing_working_fragments :: proc() -> string {
 
 render_working_fragments :: proc(markdown: string, request: ^Watch_Request = nil) -> (string, bool) {
 	history := History{commits = make([dynamic]Commit, 0, 1)}
+	if request != nil { history.path = request.path }
 	defer delete(history.commits)
 	append(&history.commits, Commit{markdown = markdown, working = true})
 	_, rendered := render_history_snapshot(&history, 0)

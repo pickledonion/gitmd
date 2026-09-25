@@ -5,6 +5,39 @@ import "core:strings"
 import "core:testing"
 
 @(test)
+source_files_open_with_history_and_live_preview :: proc(t: ^testing.T) {
+	root, _ := make_fixture(t)
+	defer os.remove_all(root)
+	if !testing.expect_value(t, os.make_directory(test_path(root, "src")), nil) { return }
+	if !testing.expect_value(t, os.make_directory(test_path(root, "src", "audio")), nil) { return }
+	if !testing.expect_value(t, os.make_directory(test_path(root, "tests")), nil) { return }
+	odin_path := test_path(root, "src", "audio", "audio.odin")
+	script_path := test_path(root, "tests", "example")
+	must_write(t, odin_path, "package audio\n// <script>alert(1)</script>\n")
+	must_write(t, script_path, "#!/usr/bin/env python3\nprint('<hello>')\n")
+	must_git(t, root, []string{"add", "--", "src/audio/audio.odin", "tests/example"})
+	must_git(t, root, []string{"commit", "-q", "-m", "add source files"})
+	repository, message, loaded := load_repository(root)
+	if !testing.expectf(t, loaded, "load_repository failed: %s", message) { return }
+	history, history_message, history_loaded := load_repository_history(&repository, repository.selected_file)
+	if !testing.expectf(t, history_loaded, "load_repository_history failed: %s", history_message) { return }
+	targets := []string{"/src/audio/audio.odin", "/tests/example"}
+	for target in targets {
+		response := route_request("GET", target, &history, "", &repository)
+		testing.expect_value(t, response.status, 200)
+		testing.expect(t, strings.contains(response.body, `id="preview"`))
+		testing.expect(t, strings.contains(response.body, `id="history"`))
+		testing.expect(t, strings.contains(response.body, `&lt;`))
+		testing.expect(t, !strings.contains(response.body, "<script>alert(1)</script>"))
+	}
+	must_write(t, odin_path, "package audio\n// changed <tag>\n")
+	request := Watch_Request{repo_root = root, path = "src/audio/audio.odin", commit_hash = "working"}
+	fragments, rendered := render_working_fragments("package audio\n// changed <tag>\n", &request)
+	testing.expect(t, rendered)
+	testing.expect(t, strings.contains(fragments, "changed &lt;tag&gt;"))
+}
+
+@(test)
 repository_omits_unstaged_deleted_and_renamed_paths :: proc(t: ^testing.T) {
 	root, path := make_fixture(t)
 	defer os.remove_all(root)

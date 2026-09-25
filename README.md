@@ -1,6 +1,6 @@
 # gitmd
 
-- Browse Markdown files in a local Git repository.
+- Browse Markdown, Odin, and extensionless shebang scripts in a local Git repository.
 - Compare the working-tree file with its committed history.
 - Render GitHub Flavored Markdown in a two-pane localhost view.
 
@@ -73,7 +73,7 @@ make fish
 ./build/gitmd
 ```
 
-- Pass a repository directory or open a particular Markdown file:
+- Pass a repository directory or open a particular supported file:
 
 ```fish
 ./build/gitmd /path/to/repository
@@ -87,13 +87,13 @@ make fish
 - Switch among ID, Files, History, and Outline with `1`, `2`, `3`, and `4`.
   - ID lists headings and explicit anchor IDs across the current Markdown files.
     Select a definition to jump to it. Definitions refresh when you enter the tab.
-  - Files lists tracked and untracked `.md` and `.markdown` files that exist
+  - Files lists tracked and untracked Markdown, Odin, and extensionless shebang scripts that exist
     in the working tree, sorted case-sensitively by full repository-relative path. Staging or
     committing a file does not change its position.
   - History lists committed revisions, plus the working tree when the selected
     file has uncommitted changes.
   - Outline links to the selected file's headings.
-- See working-tree changes, commits, and Markdown file-list changes update
+- See working-tree changes, commits, and file-list changes update
   automatically, or click a commit to view its fixed snapshot.
 - Enable **Show changes** below the sidebar tabs to highlight added or edited
   blocks in pale green and removed blocks in pale red at their former position.
@@ -123,7 +123,7 @@ make fish
 
 ## How it works
 
-- Lists tracked and untracked Markdown files with `git ls-files`.
+- Lists tracked and untracked Markdown, Odin, and extensionless shebang scripts with `git ls-files`.
 - Follows a selected file's committed renames with `git log`.
 - Renders the working-tree file directly.
 - Loads older snapshots on demand with `git ls-tree`, `git cat-file`, and
@@ -138,7 +138,7 @@ make fish
 - Pins and embeds Datastar v1.0.3 in the executable. Its license is stored in
   [`third_party/datastar/LICENSE.md`](third_party/datastar/LICENSE.md).
 - Never checks out a revision or writes to the repository.
-- Reads only the listed Markdown files from the working tree.
+- Reads only the listed files from the working tree.
 - Has no CDN, telemetry, account, cloud service, or runtime network dependency.
 - Serves GET requests only over the local loopback interface.
 

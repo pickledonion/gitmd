@@ -309,6 +309,15 @@ render_all_snapshots :: proc(history: ^History) -> (string, bool) {
 	return "", true
 }
 
+render_source_snapshot :: proc(commit: ^Commit) {
+	escaped := html_escape(commit.markdown)
+	commit.html = fmt.aprintf("<pre><code>%s</code></pre>\n", escaped)
+	commit.positioned_html = fmt.aprintf(`<pre data-sourcepos="1:1-1:1"><code>%s</code></pre>`+"\n", escaped)
+	commit.blocks = make([dynamic]Markdown_Block, 0, 1)
+	append(&commit.blocks, Markdown_Block{content = commit.html, position = "pre:1:1-1:1"})
+	commit.rendered = true
+}
+
 // Rendering a baseline never recursively loads its own baseline.
 ensure_snapshot_rendered :: proc(history: ^History, index: int) -> (string, bool) {
 	commit := &history.commits[index]
@@ -316,6 +325,10 @@ ensure_snapshot_rendered :: proc(history: ^History, index: int) -> (string, bool
 	if !commit.blob_loaded && len(commit.markdown) == 0 && !commit.working {
 		message, loaded := load_blob(history.repo_root, commit)
 		if !loaded { return message, false }
+	}
+	if len(history.path) > 0 && !is_markdown_path(history.path) {
+		render_source_snapshot(commit)
+		return "", true
 	}
 	api, message, loaded := load_cmark()
 	if !loaded { return message, false }

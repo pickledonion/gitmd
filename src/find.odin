@@ -85,6 +85,7 @@ repository_find_response :: proc(repository: ^Repository) -> Http_Response {
 	}
 	index := Find_Index{targets = make([dynamic]Find_Target)}
 	for path in files {
+		if !is_markdown_path(path) { continue }
 		contents, err := os.read_entire_file(filepath_join(repository.repo_root, path), context.allocator)
 		if err != nil { index.skipped += 1; continue }
 		html, rendered := render_markdown(&api, string(contents))
